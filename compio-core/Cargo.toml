@@ -1,0 +1,17 @@
+cargo-features = ["rename-dependency"]
+
+[package]
+name = "compio-core"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+log = "0.4.5"
+futures_core = { package = "futures-core-preview", version = "=0.3.0-alpha.7" }
+crossbeam = "0.4.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.43"
+
+[dev-dependencies]
+nix = "0.11.0"

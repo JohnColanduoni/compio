@@ -1,0 +1,10 @@
+[workspace]
+members = ["./", "compio-core"]
+
+[package]
+name = "compio"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+compio-core = { version = "0.1.0", path = "./compio-core" }
