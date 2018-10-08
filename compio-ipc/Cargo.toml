@@ -14,5 +14,11 @@ futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.7" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.43"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.6", features = ["minwindef", "winbase", "namedpipeapi"] }
+winhandle = "0.3.0"
+widestring = "0.4.0"
+uuid = { version = "0.7.1", features = ["v4"] }
+
 [dev-dependencies]
 compio-local = { path = "../compio-local" }

@@ -1,4 +1,5 @@
 #![feature(futures_api)]
+#![cfg_attr(target_os = "windows", feature(pin, arbitrary_self_types))]
 
 #[macro_use] extern crate log;
 
@@ -14,5 +15,10 @@ pub mod os {
     #[cfg(target_os = "macos")]
     pub mod kqueue {
         pub use crate::platform::queue::{EventQueueExt};
+    }
+
+    #[cfg(target_os = "windows")]
+    pub mod windows {
+        pub use crate::platform::queue::{EventQueueExt, Operation};
     }
 }

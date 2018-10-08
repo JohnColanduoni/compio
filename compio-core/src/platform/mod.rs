@@ -24,6 +24,10 @@ macro_rules! try_libc {
 #[path = "kqueue.rs"]
 pub(crate) mod queue;
 
+#[cfg(target_os = "windows")]
+#[path = "iocp.rs"]
+pub(crate) mod queue;
+
 #[cfg(unix)]
 pub(crate) mod unix;
 

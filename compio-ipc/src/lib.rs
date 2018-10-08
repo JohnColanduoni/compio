@@ -4,11 +4,17 @@
 extern crate log;
 
 #[cfg_attr(unix, path = "platform/unix.rs")]
+#[cfg_attr(target_os = "windows", path = "platform/windows.rs")]
 mod platform;
 
 pub mod os {
     #[cfg(unix)]
     pub mod unix {
+        pub use crate::platform::{StreamExt};
+    }
+
+    #[cfg(target_os = "windows")]
+    pub mod windows {
         pub use crate::platform::{StreamExt};
     }
 }
