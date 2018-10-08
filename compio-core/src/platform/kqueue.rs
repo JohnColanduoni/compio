@@ -1,3 +1,5 @@
+use crate::queue::UserEventHandler;
+
 use std::{io, mem, ptr, cmp, fmt, ops};
 use std::collections::HashSet;
 use std::sync::{
@@ -45,15 +47,6 @@ struct _Registration {
     states: FilterCollection<RegistrationState>,
 }
 
-struct RegistrationState {
-    ready: AtomicBool,
-    // TODO: Consider whether we want to go with an approach more like how Future.shared() is implemented (i.e. a Slab inside
-    // a Mutex). It has the advantage that if the Registration moves from one task to another, the old Waker is disposed. This isn't a
-    // huge issue since spurious wakeups are fine and migration of Futures is rare (especially now that Futures are pinned) but it's something
-    // to consider.
-    listeners: SegQueue<Waker>,
-}
-
 impl Drop for _Registration {
     fn drop(&mut self) {
         let queue = if let Some(queue) = self.queue.upgrade() { queue } else {
@@ -63,6 +56,31 @@ impl Drop for _Registration {
         registered_fds.remove(&self.fd);
     }
 }
+
+struct RegistrationState {
+    ready: AtomicBool,
+    // TODO: Consider whether we want to go with an approach more like how Future.shared() is implemented (i.e. a Slab inside
+    // a Mutex). It has the advantage that if the Registration moves from one task to another, the old Waker is disposed. This isn't a
+    // huge issue since spurious wakeups are fine and migration of Futures is rare (especially now that Futures are pinned) but it's something
+    // to consider.
+    listeners: SegQueue<Waker>,
+}
+
+pub struct UserEvent(Arc<_UserEvent>);
+
+// User events are implemented via EVFILT_USER, where the pointer to the _UserEvent struct is the identifier and the
+// data parameter is passed in kevent.data (NOTE: *not* kevent.udata).
+struct _UserEvent {
+    queue: Arc<_EventQueue>,
+    handler: UserEventHandler,
+}
+
+impl Drop for _UserEvent {
+    fn drop(&mut self) {
+        // TODO: unregister event from queue
+    }
+}
+
 
 impl EventQueue {
     pub fn new() -> io::Result<Self> {
@@ -107,18 +125,27 @@ impl EventQueue {
                     continue;
                 }
 
-                if event.filter & (libc::EVFILT_READ | libc::EVFILT_WRITE) != 0 {
-                    // ident is a file descriptor, and udata is an Arc<_Registration>
-                    let registration = Arc::from_raw(event.udata as *const _Registration);
-                    let state = &registration.states[Filter(event.filter)];
-                    // TODO: weaken?
-                    if !state.ready.swap(true, Ordering::SeqCst) {
-                        while let Some(waker) = state.listeners.try_pop() {
-                            waker.wake();
+                match event.filter {
+                    libc::EVFILT_READ | libc::EVFILT_WRITE => {
+                        // ident is a file descriptor, and udata is an Arc<_Registration>
+                        let registration = Arc::from_raw(event.udata as *const _Registration);
+                        let state = &registration.states[Filter(event.filter)];
+                        // TODO: weaken?
+                        if !state.ready.swap(true, Ordering::SeqCst) {
+                            while let Some(waker) = state.listeners.try_pop() {
+                                waker.wake();
+                            }
                         }
+                    },
+                    libc::EVFILT_USER => {
+                        println!("received user event {:?} (flags: {:?})", event.data, event.flags);
+                        // ident is a Arc<_UserEvent>, and data is a user-specified data parameter
+                        let user_event = Arc::from_raw(event.ident as *const _UserEvent);
+                        (user_event.handler)(event.data as usize);
+                    },
+                    filter => {
+                        warn!("unknown filter {:#x?} received", filter);
                     }
-                } else {
-                    warn!("unknown filter {:#x?} received", event.filter);
                 }
             }
 
@@ -143,6 +170,13 @@ impl EventQueue {
             wakers: Default::default(),
         })
     }
+
+    pub fn add_user_event(&self, handler: UserEventHandler) -> io::Result<UserEvent> {
+        Ok(UserEvent(Arc::new(_UserEvent {
+            queue: self.0.clone(),
+            handler,
+        })))
+    }
 }
 
 impl Default for RegistrationState {
@@ -159,17 +193,17 @@ pub trait EventQueueExt {
 }
 
 impl Registration {
-    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<Poll<()>> {
+    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
         let state = &self.inner.states[filter];
         // TODO: weaken?
         if state.ready.load(Ordering::SeqCst) {
             self.wakers[filter] = None;
-            return Ok(Poll::Ready(()));
+            return Poll::Ready(Ok(()));
         }
 
         if let Some(existing_waker) = &self.wakers[filter] {
             if waker.will_wake_nonlocal(existing_waker) {
-                return Ok(Poll::Pending);
+                return Poll::Pending;
             }
         }
 
@@ -178,11 +212,11 @@ impl Registration {
         // TODO: weaken?
         if state.ready.load(Ordering::SeqCst) {
             self.wakers[filter] = None;
-            return Ok(Poll::Ready(()));
+            return Poll::Ready(Ok(()));
         }
         self.wakers[filter] = Some(waker.clone().into());
 
-        Ok(Poll::Pending)
+        Poll::Pending
     }
 
     pub fn clear_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<()> {
@@ -274,6 +308,59 @@ impl fmt::Debug for Filter {
             libc::EVFILT_READ => write!(f, "Filter(Read)"),
             libc::EVFILT_WRITE => write!(f, "Filter(Write)"),
             _ => write!(f, "Filter({:#x?})", self.0),
+        }
+    }
+}
+
+impl UserEvent {
+    pub fn trigger(&self, data: usize) -> io::Result<()> {
+        unsafe {
+            // Add an extra reference to the Arc underlying this struct. Ownership of this extra reference count
+            // will be take on by the event.
+            let extra_ref = self.0.clone();
+            let mut changes = [
+                libc::kevent {
+                    ident: &*extra_ref as *const _UserEvent as usize,
+                    filter: libc::EVFILT_USER,
+                    flags: libc::EV_RECEIPT | libc::EV_ADD | libc::EV_CLEAR | libc::EV_ONESHOT,
+                    fflags: libc::NOTE_TRIGGER,
+                    data: data as isize,
+                    udata: 0 as _, 
+                },
+            ];
+
+            let event_count = libc::kevent(
+                self.0.queue.fd,
+                changes.as_ptr(),
+                changes.len() as c_int,
+                changes.as_mut_ptr(),
+                changes.len() as c_int,
+                ptr::null(), 
+            );
+
+            if event_count < 0 {
+                let err = io::Error::last_os_error();
+                error!("kevent() failed: {}", err);
+                return Err(err);
+            }
+            debug_assert_eq!(changes.len(), event_count as usize);
+
+            for change in changes.iter() {
+                // EV_RECEIPT should set EV_ERROR, but this is done just to not interfere with existing events
+                debug_assert_ne!(change.flags & libc::EV_ERROR, 0);
+                
+                if change.data == 0 {
+                    continue
+                }
+
+                return Err(io::Error::from_raw_os_error(change.data as i32));
+            }
+
+            // Once we're sure the event has been added, make sure we keep around the extra reference now in
+            // the event queue.
+            mem::forget(extra_ref);
+
+            Ok(())
         }
     }
 }

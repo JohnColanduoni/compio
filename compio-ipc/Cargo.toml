@@ -1,0 +1,18 @@
+cargo-features = ["rename-dependency"]
+
+[package]
+name = "compio-ipc"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+compio-core = { version = "0.1.0", path = "../compio-core" }
+
+log = "0.4.5"
+futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.7" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.43"
+
+[dev-dependencies]
+compio-local = { path = "../compio-local" }

@@ -1,0 +1,151 @@
+#![feature(futures_api, pin)]
+
+use std::{io};
+use std::pin::Pin;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use std::future::Future;
+use std::task::{self, Wake, Poll};
+
+use compio_core::queue::{EventQueue, UserEvent};
+use scoped_tls::scoped_thread_local;
+use pin_utils::pin_mut;
+use futures_core::{
+    future::LocalFutureObj,
+    stream::Stream,
+};
+use futures_util::stream::FuturesUnordered;
+
+pub struct LocalExecutor {
+    shared: Arc<_LocalExecutor>,
+    spanwed_futures: FuturesUnordered<LocalFutureObj<'static, ()>>,
+    waker: Arc<LocalExecutorWakeState>,
+}
+
+struct _LocalExecutor {
+    queue: EventQueue,
+    // Incremented every time a Future being polled by this executor is awakened. A poll pass is not complete
+    // until it finishes without this number changing.
+    // TODO: padding for false sharing?
+    awake_seq: AtomicUsize,
+}
+
+struct LocalExecutorWakeState {
+    shared: Arc<_LocalExecutor>,
+    // An event used to interrupt blocking on the event queue when a Waker needs to be invoked from a remote thread.
+    remote_wake: UserEvent,
+}
+
+impl LocalExecutor {
+    pub fn new() -> io::Result<LocalExecutor> {
+        let queue = EventQueue::new()?;
+        Self::with_event_queue(queue)
+    }
+
+    pub fn with_event_queue(queue: EventQueue) -> io::Result<LocalExecutor> {
+        let shared = Arc::new(_LocalExecutor {
+            queue,
+            awake_seq: AtomicUsize::new(0),
+        });
+
+        let remote_wake = shared.queue.add_user_event(Box::new({
+            let shared = shared.clone();
+            move |_data| {
+                // TODO: weaken?
+                shared.awake_seq.fetch_add(1, Ordering::SeqCst);
+            }
+        }))?;
+
+        let waker = Arc::new(LocalExecutorWakeState {
+            shared: shared.clone(),
+            remote_wake,
+        });
+
+        Ok(LocalExecutor {
+            shared,
+            spanwed_futures: FuturesUnordered::new(),
+            waker,
+        })
+    }
+
+    pub fn queue(&self) -> &EventQueue {
+        &self.shared.queue
+    }
+
+    pub fn block_on<F>(&mut self, future: F) -> F::Output where
+        F: Future,
+    {
+        pin_mut!(future);
+        let waker = unsafe { task::local_waker(self.waker.clone()) };
+
+        let executor_id = _LocalExecutor::id(&self.shared);
+        CURRENT_LOCAL_EXECUTOR_ID.set(&executor_id, move || {
+            let mut init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
+            'outer: loop {
+                // TODO: weaken?
+                match Pin::new(&mut future).poll(&waker) {
+                    Poll::Ready(x) => return x,
+                    Poll::Pending => {},
+                }
+                // Poll the spawned futures until there are either none left or they are all waiting
+                // to be awoken
+                loop {
+                    match Pin::new(&mut self.spanwed_futures).poll_next(&waker) {
+                        Poll::Ready(Some(())) => {},
+                        Poll::Ready(None) => break,
+                        Poll::Pending => break,
+                    }
+                }
+
+                // If we made it through the polling pass without the awake sequence number changing, reset it to zero. If not, repeat the
+                // pass with the new initial sequence value.
+                // TODO: weaken?
+                match self.shared.awake_seq.compare_exchange(init_seq, 0, Ordering::SeqCst, Ordering::SeqCst) {
+                    Ok(_) => {},
+                    Err(new_seq) => {
+                        init_seq = new_seq;
+                        continue;
+                    }
+                }
+
+                'turn: loop {
+                    self.shared.queue.turn(None, None).expect("failed to turn EventQueue");
+                    // TODO: weaken?
+                    init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
+                    if init_seq != 0 {
+                        continue 'outer;
+                    }
+                }
+            }
+        })
+    }
+}
+
+scoped_thread_local! {
+    static CURRENT_LOCAL_EXECUTOR_ID: usize
+}
+
+impl _LocalExecutor {
+    pub fn id(arc_self: &Arc<Self>) -> usize {
+        &**arc_self as *const _LocalExecutor as usize
+    }
+}
+
+impl Wake for LocalExecutorWakeState {
+    fn wake(arc_self: &Arc<Self>) {
+        // Avoid triggering remote wakeup if we're already in a turn pass
+        let needs_queue_event = if CURRENT_LOCAL_EXECUTOR_ID.is_set() {
+            CURRENT_LOCAL_EXECUTOR_ID.with(|&current_id| current_id != _LocalExecutor::id(&arc_self.shared))
+        } else {
+            true
+        };
+        // TODO: weaken?
+        arc_self.shared.awake_seq.fetch_add(1, Ordering::SeqCst);
+        if needs_queue_event {
+            arc_self.remote_wake.trigger(0).expect("failed to trigger wake of event queue");
+        }
+    }
+}
+

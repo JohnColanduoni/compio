@@ -1,5 +1,5 @@
 [workspace]
-members = ["./", "compio-core"]
+members = ["./", "compio-core", "compio-threadpool", "compio-ipc", "compio-local"]
 
 [package]
 name = "compio"

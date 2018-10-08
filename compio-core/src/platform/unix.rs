@@ -53,7 +53,7 @@ impl Registration {
      * may cause the previously registered waker for this clone of [Registration](Registration) to be unregistered. A particular clone of the Registration 
      * should always be used with only one [Future](std::future::Future).
      */
-    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<Poll<()>> {
+    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
         self.0.poll_ready(filter.0, waker)
     }
 
