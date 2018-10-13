@@ -1,4 +1,5 @@
 #![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
+#![cfg_attr(test, feature(gen_future))]
 
 #[macro_use]
 extern crate log;
@@ -19,12 +20,12 @@ pub mod os {
     }
 }
 
-use std::{io};
+use std::{io, fmt};
 use std::future::Future;
 
 use compio_core::queue::EventQueue;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Stream {
     inner: platform::Stream,
 }
@@ -57,6 +58,12 @@ impl Stream {
     }
 }
 
+impl fmt::Debug for Stream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &self.inner)
+    }
+}
+
 impl PreStream {
     pub fn register(self, event_queue: &EventQueue) -> io::Result<Stream> {
         Ok(Stream {
@@ -73,27 +80,55 @@ impl PreStream {
     }
 }
 
+impl fmt::Debug for PreStream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &self.inner)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::future::poll_with_tls_waker;
+    use std::time::Duration;
+
     use compio_local::LocalExecutor;
     use futures_util::join;
+    use pin_utils::pin_mut;
+
+    #[test]
+    fn stream_is_send() {
+        fn is_send<T: Send>() {}
+        is_send::<Stream>();
+    }
+
+    #[test]
+    fn prestream_is_send() {
+        fn is_send<T: Send>() {}
+        is_send::<PreStream>();
+    }
 
     #[test]
     fn create_stream_pair() {
+        let _ = env_logger::try_init();
+
         let event_queue = EventQueue::new().unwrap();
         let (_a, _b) = Stream::pair(&event_queue).unwrap();
     }
 
     #[test]
     fn create_prestream_pair() {
+        let _ = env_logger::try_init();
+
         let (_a, _b) = PreStream::pair().unwrap();
     }
 
 
     #[test]
     fn simple_send_recv() {
+        let _ = env_logger::try_init();
+
         let mut executor = LocalExecutor::new().unwrap();
         let (mut a, mut b) = Stream::pair(executor.queue()).unwrap(); 
 
@@ -111,5 +146,25 @@ mod tests {
 
             assert_eq!(b"Hello World!", &*read);
         });
+    }
+
+    #[test]
+    fn recv_cancel() {
+        let _ = env_logger::try_init();
+
+        let mut executor = LocalExecutor::new().unwrap();
+        let (mut a, mut _b) = Stream::pair(executor.queue()).unwrap(); 
+
+        executor.block_on(async {
+            let read = async {
+                let mut buffer = vec![0u8; 64];
+                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                buffer.truncate(byte_count);
+                buffer
+            };
+            pin_mut!(read);
+            assert!(poll_with_tls_waker(read).is_pending());
+        });
+        assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
     }
 }

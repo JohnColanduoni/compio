@@ -19,6 +19,6 @@ pub mod os {
 
     #[cfg(target_os = "windows")]
     pub mod windows {
-        pub use crate::platform::queue::{EventQueueExt, Operation};
+        pub use crate::platform::queue::{EventQueueExt, Operation, OperationSource};
     }
 }

@@ -70,7 +70,6 @@ impl LocalExecutor {
         CURRENT_LOCAL_EXECUTOR_ID.set(&executor_id, move || {
             let mut init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
             'outer: loop {
-                // TODO: weaken?
                 match Pin::new(&mut future).poll(&waker) {
                     Poll::Ready(x) => return x,
                     Poll::Pending => {},
@@ -87,7 +86,6 @@ impl LocalExecutor {
 
                 // If we made it through the polling pass without the awake sequence number changing, reset it to zero. If not, repeat the
                 // pass with the new initial sequence value.
-                // TODO: weaken?
                 match self.shared.awake_seq.compare_exchange(init_seq, 0, Ordering::SeqCst, Ordering::SeqCst) {
                     Ok(_) => {},
                     Err(new_seq) => {
@@ -98,7 +96,6 @@ impl LocalExecutor {
 
                 'turn: loop {
                     self.shared.queue.turn(None, None).expect("failed to turn EventQueue");
-                    // TODO: weaken?
                     init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
                     if init_seq != 0 {
                         continue 'outer;
@@ -127,7 +124,6 @@ impl Wake for _LocalExecutor {
         } else {
             true
         };
-        // TODO: weaken?
         arc_self.awake_seq.fetch_add(1, Ordering::SeqCst);
         if needs_queue_event {
             arc_self.remote_wake.trigger(0).expect("failed to trigger wake of event queue");

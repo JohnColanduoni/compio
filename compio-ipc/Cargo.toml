@@ -22,3 +22,6 @@ uuid = { version = "0.7.1", features = ["v4"] }
 
 [dev-dependencies]
 compio-local = { path = "../compio-local" }
+
+env_logger = "0.5.13"
+pin-utils = "=0.1.0-alpha.3"

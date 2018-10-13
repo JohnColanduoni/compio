@@ -1,15 +1,13 @@
-use std::{io, mem, ptr};
-use std::pin::{Pin, Unpin};
+use std::{io, mem, ptr, fmt};
+use std::pin::{Pin};
 use std::sync::Arc;
 use std::future::Future;
 use std::task::{LocalWaker, Poll};
-use std::ffi::{OsString};
 use std::os::windows::prelude::*;
 
 use compio_core::queue::EventQueue;
 use compio_core::os::windows::*;
 use uuid::Uuid;
-use futures_util::try_ready;
 use winhandle::{WinHandle, winapi_handle_call, winapi_bool_call};
 use widestring::U16CString;
 use winapi::{
@@ -25,12 +23,12 @@ use winapi::{
     um::ioapiset::{GetOverlappedResultEx},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Stream {
     inner: Arc<_Stream>,
+    operation_source: OperationSource,
 }
 
-#[derive(Debug)]
 struct _Stream {
     pipe: WinHandle,
 }
@@ -76,12 +74,13 @@ pub trait StreamExt: Sized {
 
 impl StreamExt for crate::Stream {
     unsafe fn from_raw_handle(handle: RawHandle, event_queue: &EventQueue) -> io::Result<Self> {
-        event_queue.register_handle_raw(handle)?;
+        let operation_source = event_queue.register_handle_raw(handle)?;
 
         let inner = Stream {
             inner: Arc::new(_Stream {
                 pipe: WinHandle::from_raw_unchecked(handle as _),
             }),
+            operation_source,
         };
 
         Ok(crate::Stream {
@@ -96,17 +95,29 @@ impl AsRawHandle for crate::Stream {
     }
 }
 
-impl<'a> Unpin for StreamReadFuture<'a> {}
+impl fmt::Debug for Stream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &*self.inner)
+    }
+}
+
+impl fmt::Debug for _Stream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Stream")
+            .field("pipe", &self.pipe)
+            .finish()
+    }
+}
 
 impl<'a> Future for StreamReadFuture<'a> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
         unsafe {
             let this = Pin::get_mut_unchecked(self);
             let pipe = &this.stream.inner.pipe;
             let buffer = &mut this.buffer;
-            Operation::start_or_poll_handle(Pin::new_unchecked(&mut this.operation), waker, &this.stream.inner.pipe, move |overlapped| {
+            Operation::start_or_poll(Pin::new_unchecked(&mut this.operation),  &mut this.stream.operation_source, waker, move |overlapped| {
                 let mut bytes_read: DWORD = 0;
                 winapi_bool_call!(ReadFile(
                     pipe.get(),
@@ -121,17 +132,15 @@ impl<'a> Future for StreamReadFuture<'a> {
     }
 }
 
-impl<'a> Unpin for StreamWriteFuture<'a> {}
-
 impl<'a> Future for StreamWriteFuture<'a> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
         unsafe {
             let this = Pin::get_mut_unchecked(self);
             let pipe = &this.stream.inner.pipe;
             let buffer = this.buffer;
-            Operation::start_or_poll_handle(Pin::new_unchecked(&mut this.operation), waker, &this.stream.inner.pipe, move |overlapped| {
+            Operation::start_or_poll(Pin::new_unchecked(&mut this.operation), &mut this.stream.operation_source, waker, move |overlapped| {
                 let mut bytes_written: DWORD = 0;
                 winapi_bool_call!(WriteFile(
                     pipe.get(),
@@ -149,11 +158,12 @@ impl<'a> Future for StreamWriteFuture<'a> {
 
 impl PreStream {
     pub fn register(self, event_queue: &EventQueue) -> io::Result<Stream> {
-        event_queue.register_handle(&self.pipe)?;
+        let operation_source = event_queue.register_handle(&self.pipe)?;
         Ok(Stream {
             inner: Arc::new(_Stream {
                 pipe: self.pipe,
             }),
+            operation_source,
         })
     }
 

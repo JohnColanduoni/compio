@@ -130,7 +130,6 @@ impl EventQueue {
                         // ident is a file descriptor, and udata is an Arc<_Registration>
                         let registration = Arc::from_raw(event.udata as *const _Registration);
                         let state = &registration.states[Filter(event.filter)];
-                        // TODO: weaken?
                         if !state.ready.swap(true, Ordering::SeqCst) {
                             while let Some(waker) = state.listeners.try_pop() {
                                 waker.wake();
@@ -195,7 +194,6 @@ pub trait EventQueueExt {
 impl Registration {
     pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
         let state = &self.inner.states[filter];
-        // TODO: weaken?
         if state.ready.load(Ordering::SeqCst) {
             self.wakers[filter] = None;
             return Poll::Ready(Ok(()));
@@ -209,7 +207,6 @@ impl Registration {
 
         state.listeners.push(waker.clone().into());
         // Check state again, just in case there was a race
-        // TODO: weaken?
         if state.ready.load(Ordering::SeqCst) {
             self.wakers[filter] = None;
             return Poll::Ready(Ok(()));
