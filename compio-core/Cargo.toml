@@ -14,7 +14,7 @@ crossbeam = "0.4.1"
 libc = "0.2.43"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3.6", features = ["minwindef", "minwinbase", "winbase", "handleapi", "ioapiset"] }
+winapi = { version = "0.3.6", features = ["minwindef", "minwinbase", "winbase", "handleapi", "ioapiset", "winsock2"] }
 winhandle = "0.3.0"
 futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.7" }
 

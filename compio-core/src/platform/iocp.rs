@@ -26,12 +26,18 @@ use winapi::{
     um::handleapi::{INVALID_HANDLE_VALUE},
     um::ioapiset::{CreateIoCompletionPort, GetQueuedCompletionStatusEx, PostQueuedCompletionStatus,
         GetOverlappedResultEx, CancelIoEx},
+    um::winsock2::{WSAGetLastError, WSAGetOverlappedResult, getsockopt, WSAPROTOCOL_INFOW, SOL_SOCKET, SO_PROTOCOL_INFOW, XP1_IFS_HANDLES, WSA_IO_INCOMPLETE},
 };
 
 pub struct EventQueue(Arc<_EventQueue>);
 
 struct _EventQueue {
     iocp: WinHandle,
+}
+
+#[derive(Clone)]
+pub struct Registrar {
+    queue: Arc<_EventQueue>,
 }
 
 #[repr(C)]
@@ -44,6 +50,8 @@ enum TokenKind {
     UserEvent,
 }
 
+// FIXME: we add an extra reference to _OperationSource when we register with the IOCP, but we never
+// free it. Figure out a way to do so safely.
 pub struct OperationSource {
     shared: Arc<_OperationSource>,
     avail_overlapped: Option<Arc<OperationOverlapped>>,
@@ -119,7 +127,28 @@ impl Drop for Operation {
                         }
                     }
                 },
-                OperationSourceObject::Socket(_) => unimplemented!(),
+                OperationSourceObject::Socket(socket) => unsafe {
+                    let overlapped_ptr = overlapped.overlapped.get();
+                    if log_enabled!(log::Level::Trace) {
+                        trace!("cancelling operation on socket {:?} backed by OperationOverlapped instance {:?}", WinHandleRef::from_raw_unchecked(socket as _), &*overlapped as *const _);
+                    }
+                    if CancelIoEx(socket as _, overlapped_ptr) == FALSE {
+                        match GetLastError() {
+                            ERROR_NOT_FOUND => {
+                                // Operation is finished, just fall back to our normal deletion routine
+                            },
+                            code => {
+                                let err = io::Error::from_raw_os_error(code as i32);
+                                error!("CancelIoEx failed: {}. Leaking OVERLAPPED instance to prevent memory unsafety :(", err);
+                                // Clear AtomicWaker so we don't cause a Waker instance to get leaked (this can result in huge memory leaks, because
+                                // Wakers will often keep the memory associated with a spawned Future alive)
+                                overlapped.waker.register(&noop_local_waker()); 
+                                mem::forget(overlapped);
+                                return
+                            },
+                        }
+                    }
+                },
             }
         }
     }
@@ -158,6 +187,10 @@ impl EventQueue {
         Ok(EventQueue(Arc::new(_EventQueue {
             iocp,
         })))
+    }
+
+    pub fn registrar(&self) -> io::Result<Registrar> {
+        Ok(Registrar { queue: self.0.clone() })
     }
 
     
@@ -215,12 +248,14 @@ impl EventQueue {
     }
 }
 
-pub trait EventQueueExt {
+pub trait RegistrarExt {
     fn register_handle(&self, handle: &impl AsRawHandle) -> io::Result<OperationSource>;
     unsafe fn register_handle_raw(&self, handle: RawHandle) -> io::Result<OperationSource>;
+    fn register_socket(&self, socket: &impl AsRawSocket) -> io::Result<OperationSource>;
+    unsafe fn register_socket_raw(&self, socket: RawSocket) -> io::Result<OperationSource>;
 }
 
-impl EventQueueExt for crate::queue::EventQueue {
+impl RegistrarExt for crate::queue::Registrar {
     fn register_handle(&self, handle: &impl AsRawHandle) -> io::Result<OperationSource> {
         unsafe { self.register_handle_raw(handle.as_raw_handle()) }
     }
@@ -243,7 +278,7 @@ impl EventQueueExt for crate::queue::EventQueue {
 
         if CreateIoCompletionPort(
             handle as _,
-            self.inner.0.iocp.get(),
+            self.inner.queue.iocp.get(),
             Arc::into_raw(source.clone()) as ULONG_PTR,
             0
         ) == ptr::null_mut() {
@@ -256,6 +291,74 @@ impl EventQueueExt for crate::queue::EventQueue {
             shared: source,
             avail_overlapped: None,
         })
+    }
+
+    fn register_socket(&self, socket: &impl AsRawSocket) -> io::Result<OperationSource> {
+        unsafe { self.register_socket_raw(socket.as_raw_socket()) }
+    }
+
+    unsafe fn register_socket_raw(&self, socket: RawSocket) -> io::Result<OperationSource> {
+        // Check if socket supports IFS, which is needed for SetFileCompletionNotificationModes
+        let mut protocol_info: WSAPROTOCOL_INFOW = mem::zeroed();
+        let mut opt_len = mem::size_of_val(&protocol_info) as i32;
+        if getsockopt(
+            socket as _,
+            SOL_SOCKET,
+            SO_PROTOCOL_INFOW,
+            &mut protocol_info as *mut WSAPROTOCOL_INFOW as _,
+            &mut opt_len,
+        ) != 0 {
+            let error = WSAGetLastError();
+            let err = io::Error::from_raw_os_error(error as i32);
+            error!("getsockopt failed: {}", err);
+            return Err(err);
+        }
+        if opt_len as usize != mem::size_of_val(&protocol_info) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid SO_PROTOCOL_INFOW length"));
+        }
+
+        if protocol_info.dwServiceFlags1 & XP1_IFS_HANDLES == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket does not support IFS, which is required for EventQueue support"))
+        }
+
+        // We use SetFileCompletionNotificationModes so the IOCP is not notified 
+        // when an IO call returns immediately. Doing so is not only ineffecient, it may cause
+        // memory unsafety if the overlapped structure is dropped early.
+        winapi_bool_call!(log: SetFileCompletionNotificationModes(
+            socket as _,
+            FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE,
+        ))?;
+
+        let source = Arc::new(_OperationSource {
+            token: _Token {
+                kind: TokenKind::OperationSource,
+            },
+            object: OperationSourceObject::Socket(socket),
+        });
+
+        if CreateIoCompletionPort(
+            socket as _,
+            self.inner.queue.iocp.get(),
+            Arc::into_raw(source.clone()) as ULONG_PTR,
+            0
+        ) == ptr::null_mut() {
+            let err = io::Error::last_os_error();
+            error!("CreateIoCompletionPort failed: {}", err);
+            return Err(err);
+        }
+
+        Ok(OperationSource {
+            shared: source,
+            avail_overlapped: None,
+        })
+    }
+}
+
+impl fmt::Debug for Registrar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Registrar")
+            .field("iocp", &self.queue.iocp)
+            .finish()
     }
 }
 
@@ -385,8 +488,26 @@ impl Operation {
                         
                         Poll::Ready(Ok(bytes_transferred as usize))
                     },
-                    OperationSourceObject::Socket(_socket) => {
-                        unimplemented!()
+                    OperationSourceObject::Socket(socket) => {
+                        let mut bytes_transferred: DWORD = 0;
+                        let mut flags: DWORD = 0;
+                        if WSAGetOverlappedResult(
+                            socket as _,
+                            overlapped_ptr,
+                            &mut bytes_transferred,
+                            FALSE,
+                            &mut flags,
+                        ) == FALSE {
+                            match WSAGetLastError() {
+                                WSA_IO_INCOMPLETE => return Poll::Pending,
+                                code => {
+                                    let err = io::Error::from_raw_os_error(code as i32);
+                                    return Poll::Ready(Err(err));
+                                },
+                            }
+                        }
+
+                        Poll::Ready(Ok(bytes_transferred as usize))
                     },
                 }
             }

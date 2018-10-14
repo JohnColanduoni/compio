@@ -9,7 +9,7 @@ use std::sync::{
 use std::future::Future;
 use std::task::{self, Wake, Poll};
 
-use compio_core::queue::{EventQueue, UserEvent};
+use compio_core::queue::{EventQueue, UserEvent, Registrar};
 use scoped_tls::scoped_thread_local;
 use pin_utils::pin_mut;
 use futures_core::{
@@ -56,7 +56,11 @@ impl LocalExecutor {
         })
     }
 
-    pub fn queue(&self) -> &EventQueue {
+    pub fn registrar(&self) -> io::Result<Registrar> {
+        self.shared.queue.registrar()
+    }
+
+    pub fn queue(&mut self) -> &EventQueue {
         &self.shared.queue
     }
 

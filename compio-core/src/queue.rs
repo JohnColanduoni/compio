@@ -6,6 +6,11 @@ pub struct EventQueue {
     pub(crate) inner: crate::platform::queue::EventQueue,
 }
 
+#[derive(Clone, Debug)]
+pub struct Registrar {
+    pub(crate) inner: crate::platform::queue::Registrar,
+}
+
 pub struct UserEvent {
     pub(crate) inner: crate::platform::queue::UserEvent,
 }
@@ -26,6 +31,11 @@ impl EventQueue {
     pub fn add_user_event(&self, handler: UserEventHandler) -> io::Result<UserEvent> {
         let inner = self.inner.add_user_event(handler)?;
         Ok(UserEvent { inner })
+    }
+
+    pub fn registrar(&self) -> io::Result<Registrar> {
+        let inner = self.inner.registrar()?;
+        Ok(Registrar { inner })
     }
 }
 

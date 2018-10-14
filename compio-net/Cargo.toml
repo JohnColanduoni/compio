@@ -1,0 +1,22 @@
+cargo-features = ["rename-dependency"]
+
+[package]
+name = "compio-net"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+compio-core = { version = "0.1.0", path = "../compio-core" }
+
+log = "0.4.5"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.6", features = ["minwindef", "minwinbase", "ntdef", "ws2def", "winsock2"] }
+net2 = "0.2.33"
+
+[dev-dependencies]
+compio-local = { path = "../compio-local" }
+
+env_logger = "0.5.13"
+pin-utils = "=0.1.0-alpha.3"
+futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.7" }
