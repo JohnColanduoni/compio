@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, LocalWaker};
 use std::io::{Result};
-use std::net::{SocketAddr, Shutdown, IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::windows::prelude::*;
 
 use compio_core::queue::{Registrar};
@@ -97,6 +97,10 @@ macro_rules! winsock_zero_call {
 impl TcpListener {
     pub fn bind(addr: &SocketAddr, queue: &Registrar) -> Result<TcpListener> {
         let listener = std::net::TcpListener::bind(addr)?;
+        Self::from_std(listener, queue)
+    }
+
+    pub fn from_std(listener: std::net::TcpListener, queue: &Registrar) -> Result<TcpListener> {
         let operation_source = queue.register_socket(&listener)?;
         Ok(TcpListener {
             inner: Arc::new(_TcpListener {
@@ -107,8 +111,8 @@ impl TcpListener {
         })
     }
 
-    pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.inner.std.local_addr()
+    pub fn as_std(&self) -> &std::net::TcpListener {
+        &self.inner.std
     }
 
     pub fn accept<'a>(&'a mut self) -> AcceptFuture<'a> {
@@ -131,6 +135,20 @@ impl TcpStream {
         }
     }
 
+    pub fn from_std(stream: std::net::TcpStream, queue: &Registrar) -> Result<TcpStream> {
+        let operation_source = queue.register_socket(&stream)?;
+        Ok(TcpStream {
+            inner: Arc::new(_TcpStream {
+                std: stream,
+            }),
+            operation_source,
+        })
+    }
+
+    pub fn as_std(&self) -> &std::net::TcpStream {
+        &self.inner.std
+    }
+
     pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> ReadFuture<'a> {
         ReadFuture {
             stream: self,
@@ -139,7 +157,7 @@ impl TcpStream {
                 len: buffer.len() as ULONG,
                 buf: buffer.as_mut_ptr() as _,
             },
-            buffer: buffer,
+            _buffer: buffer,
         }
     }
 
@@ -151,7 +169,7 @@ impl TcpStream {
                 len: buffer.len() as ULONG,
                 buf: buffer.as_ptr() as _,
             },
-            buffer: buffer,
+            _buffer: buffer,
         }
     }
 }
@@ -170,7 +188,7 @@ impl<'a> Future for AcceptFuture<'a> {
         let this = unsafe { Pin::get_mut_unchecked(self) };
         if this.accept_socket.is_none() {
             // Windows requires the socket be created prior to connection
-            let local_addr = this.listener.local_addr()?;
+            let local_addr = this.listener.inner.std.local_addr()?;
             let std_stream = if local_addr.is_ipv4() {
                 TcpBuilder::new_v4()?.to_tcp_stream()?
             } else {
@@ -292,8 +310,9 @@ impl<'a> Future for ConnectFuture<'a> {
 
 pub struct ReadFuture<'a> {
     stream: &'a mut TcpStream,
-    buffer: &'a mut [u8],
+    _buffer: &'a mut [u8],
     operation: Option<Operation>,
+    // WSABUF must be pinned, not just buffer
     wsabuf: WSABUF,
 }
 
@@ -329,8 +348,9 @@ impl<'a> Future for ReadFuture<'a> {
 
 pub struct WriteFuture<'a> {
     stream: &'a mut TcpStream,
-    buffer: &'a [u8],
+    _buffer: &'a [u8],
     operation: Option<Operation>,
+    // WSABUF must be pinned, not just buffer
     wsabuf: WSABUF,
 }
 
@@ -378,6 +398,7 @@ const WSAID_ACCEPTEX: GUID = GUID {
 const SO_UPDATE_CONNECT_CONTEXT: c_int = 0x7010;
 const SO_UPDATE_ACCEPT_CONTEXT: c_int = 0x700B;
 
+#[allow(bad_style)]
 type LPFN_CONNECTEX = Option<extern "system" fn(
   s: SOCKET,
   name: *const SOCKADDR,
@@ -387,6 +408,7 @@ type LPFN_CONNECTEX = Option<extern "system" fn(
   lpdwBytesSent: LPDWORD,
   lpOverlapped: LPOVERLAPPED,
 ) -> BOOL>;
+#[allow(bad_style)]
 type LPFN_ACCEPTEX = Option<extern "system" fn(
   sListenSocket: SOCKET,
   sAcceptSocket: SOCKET,

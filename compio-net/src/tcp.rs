@@ -22,15 +22,16 @@ impl TcpListener {
     }
 
     pub fn from_std(listener: std::net::TcpListener, queue: &Registrar) -> Result<TcpListener> {
-        unimplemented!()
+        let inner = platform::TcpListener::from_std(listener, queue)?;
+        Ok(TcpListener { inner })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.inner.local_addr()
+        self.inner.as_std().local_addr()
     }
 
     pub fn take_error(&self) -> Result<Option<Error>> {
-        unimplemented!()
+        self.inner.as_std().take_error()
     }
 
     pub fn accept<'a>(&'a mut self) -> impl Future<Output = Result<TcpStream>> + Send + 'a {
@@ -50,27 +51,28 @@ impl TcpStream {
     }
 
     pub fn from_std(listener: std::net::TcpStream, queue: &Registrar) -> Result<TcpStream> {
-        unimplemented!()
+        let inner = platform::TcpStream::from_std(listener, queue)?;
+        Ok(TcpStream { inner })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        unimplemented!()
+        self.inner.as_std().local_addr()
     }
 
     pub fn shutdown(&self, how: Shutdown) -> Result<()> {
-        unimplemented!()
+        self.inner.as_std().shutdown(how)
     }
 
     pub fn set_ttl(&self, ttl: u32) -> Result<()> {
-        unimplemented!()
+        self.inner.as_std().set_ttl(ttl)
     }
 
     pub fn ttl(&self) -> Result<u32> {
-        unimplemented!()
+        self.inner.as_std().ttl()
     }
 
     pub fn take_error(&self) -> Result<Option<Error>> {
-        unimplemented!()
+        self.inner.as_std().take_error()
     }
 
     pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output = Result<usize>> + Send + 'a {
@@ -106,8 +108,6 @@ mod tests {
         is_send_and_sync::<TcpStream>();
     }
 
-
-
     #[test]
     fn connect_echo() {
         let _ = env_logger::try_init();
@@ -116,6 +116,37 @@ mod tests {
         let registrar = executor.registrar().unwrap();
         executor.block_on(async {
             let mut listener = TcpListener::bind(&SocketAddr::from_str("127.0.0.1:0").unwrap(), &registrar).unwrap();
+            let connect = TcpStream::connect(listener.local_addr().unwrap(), &registrar);
+            let accept = listener.accept();
+
+            let (mut accepted, mut connected) = try_join!(accept, connect).unwrap();
+
+            let server = async {
+                let mut buffer = [0u8; 256];
+                let byte_count = await!(accepted.read(&mut buffer)).unwrap();
+                let buffer = &buffer[0..byte_count];
+                await!(accepted.write(buffer)).unwrap();
+            };
+            let client = async {
+                await!(connected.write(b"Hello World!")).unwrap();
+                let mut buffer = [0u8; 256];
+                let byte_count = await!(connected.read(&mut buffer)).unwrap();
+                let buffer = &buffer[0..byte_count];
+                assert_eq!(b"Hello World!", buffer);
+            };
+
+            join!(server, client);
+        });
+    }
+
+    #[test]
+    fn connect_echo_ipv6() {
+        let _ = env_logger::try_init();
+
+        let mut executor = LocalExecutor::new().unwrap();
+        let registrar = executor.registrar().unwrap();
+        executor.block_on(async {
+            let mut listener = TcpListener::bind(&SocketAddr::from_str("[::1]:0").unwrap(), &registrar).unwrap();
             let connect = TcpStream::connect(listener.local_addr().unwrap(), &registrar);
             let accept = listener.accept();
 
