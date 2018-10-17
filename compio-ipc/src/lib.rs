@@ -23,7 +23,7 @@ pub mod os {
 use std::{io, fmt};
 use std::future::Future;
 
-use compio_core::queue::EventQueue;
+use compio_core::queue::Registrar;
 
 #[derive(Clone)]
 pub struct Stream {
@@ -40,12 +40,27 @@ pub struct PreStream {
     inner: platform::PreStream,
 }
 
+#[derive(Clone)]
+pub struct Channel {
+    inner: platform::Channel,
+}
+
+/**
+ * A [Channel](crate::Channel) that has not yet been been associated with a [EventQueue](compio_core::queue::EventQueue).
+ * 
+ * This is useful on platforms where the underlying primitive cannot be unregistered from the [EventQueue](compio_core::queue::EventQueue)
+ * (e.g. Windows).
+ */
+pub struct PreChannel {
+    inner: platform::PreChannel,
+}
+
 impl Stream {
-    pub fn pair(event_queue: &EventQueue) -> io::Result<(Stream, Stream)> {
+    pub fn pair(queue: &Registrar) -> io::Result<(Stream, Stream)> {
         let (a, b) = PreStream::pair()?;
         Ok((
-            a.register(event_queue)?,
-            b.register(event_queue)?,
+            a.register(queue)?,
+            b.register(queue)?,
         ))
     }
 
@@ -65,9 +80,9 @@ impl fmt::Debug for Stream {
 }
 
 impl PreStream {
-    pub fn register(self, event_queue: &EventQueue) -> io::Result<Stream> {
+    pub fn register(self, queue: &Registrar) -> io::Result<Stream> {
         Ok(Stream {
-            inner: self.inner.register(event_queue)?,
+            inner: self.inner.register(queue)?,
         })
     }
 
@@ -86,13 +101,62 @@ impl fmt::Debug for PreStream {
     }
 }
 
+
+impl Channel {
+    pub fn pair(queue: &Registrar) -> io::Result<(Channel, Channel)> {
+        let (a, b) = PreChannel::pair()?;
+        Ok((
+            a.register(queue)?,
+            b.register(queue)?,
+        ))
+    }
+
+    pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
+        self.inner.read(buffer)
+    }
+
+    pub fn write<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
+        self.inner.write(buffer)
+    }
+}
+
+impl fmt::Debug for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &self.inner)
+    }
+}
+
+impl PreChannel {
+    pub fn register(self, queue: &Registrar) -> io::Result<Channel> {
+        Ok(Channel {
+            inner: self.inner.register(queue)?,
+        })
+    }
+
+    pub fn pair() -> io::Result<(PreChannel, PreChannel)> {
+        let (a, b) = platform::PreChannel::pair()?;
+        Ok((
+            PreChannel { inner: a, },
+            PreChannel { inner: b, },
+        ))
+    }
+}
+
+impl fmt::Debug for PreChannel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &self.inner)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::{mem};
     use std::future::poll_with_tls_waker;
     use std::time::Duration;
 
+    use compio_core::queue::EventQueue;
     use compio_local::LocalExecutor;
     use futures_util::join;
     use pin_utils::pin_mut;
@@ -114,7 +178,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let event_queue = EventQueue::new().unwrap();
-        let (_a, _b) = Stream::pair(&event_queue).unwrap();
+        let (_a, _b) = Stream::pair(&event_queue.registrar().unwrap()).unwrap();
     }
 
     #[test]
@@ -126,11 +190,11 @@ mod tests {
 
 
     #[test]
-    fn simple_send_recv() {
+    fn stream_simple_send_recv() {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut b) = Stream::pair(executor.queue()).unwrap(); 
+        let (mut a, mut b) = Stream::pair(&executor.registrar().unwrap()).unwrap(); 
 
         executor.block_on(async {
             let read = async {
@@ -149,11 +213,60 @@ mod tests {
     }
 
     #[test]
-    fn recv_cancel() {
+    fn stream_recv_cancel() {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut _b) = Stream::pair(executor.queue()).unwrap(); 
+        let (mut a, mut _b) = Stream::pair(&executor.registrar().unwrap()).unwrap(); 
+
+        executor.block_on(async {
+            let read = async {
+                let mut buffer = vec![0u8; 64];
+                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                buffer.truncate(byte_count);
+                buffer
+            };
+            pin_mut!(read);
+            assert!(poll_with_tls_waker(read).is_pending());
+        });
+        assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+    }
+
+    #[test]
+    fn channel_boundary_send_recv() {
+        let _ = env_logger::try_init();
+
+        let mut executor = LocalExecutor::new().unwrap();
+        let (mut a, mut b) = Channel::pair(&executor.registrar().unwrap()).unwrap(); 
+
+        executor.block_on(async {
+            let read = async {
+                let mut buffer = vec![0u8; 64];
+                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                buffer.truncate(byte_count);
+                let mut buffer2 = vec![0u8; 64];
+                let byte_count2 = await!(a.read(&mut buffer2)).unwrap();
+                buffer2.truncate(byte_count2);
+                (buffer, buffer2)
+            };
+            let write = async move {
+                await!(b.write(b"Hello World!")).unwrap();
+                await!(b.write(b":)")).unwrap();
+                mem::drop(b);
+            };
+            let (_write, read) = join!(write, read);
+
+            assert_eq!(b"Hello World!", &*read.0);
+            assert_eq!(b":)", &*read.1);
+        });
+    }
+
+    #[test]
+    fn channel_recv_cancel() {
+        let _ = env_logger::try_init();
+
+        let mut executor = LocalExecutor::new().unwrap();
+        let (mut a, mut _b) = Channel::pair(&executor.registrar().unwrap()).unwrap(); 
 
         executor.block_on(async {
             let read = async {

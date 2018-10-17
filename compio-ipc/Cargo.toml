@@ -25,3 +25,8 @@ compio-local = { path = "../compio-local" }
 
 env_logger = "0.5.13"
 pin-utils = "=0.1.0-alpha.3"
+criterion = "0.2.5"
+
+[[bench]]
+name = "channel"
+harness = false

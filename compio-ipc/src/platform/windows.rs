@@ -5,7 +5,7 @@ use std::future::Future;
 use std::task::{LocalWaker, Poll};
 use std::os::windows::prelude::*;
 
-use compio_core::queue::EventQueue;
+use compio_core::queue::Registrar;
 use compio_core::os::windows::*;
 use uuid::Uuid;
 use winhandle::{WinHandle, winapi_handle_call, winapi_bool_call};
@@ -15,7 +15,7 @@ use winapi::{
     shared::winerror::{ERROR_IO_PENDING},
     um::minwinbase::{OVERLAPPED},
     um::winbase::{PIPE_ACCESS_DUPLEX, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, 
-        PIPE_REJECT_REMOTE_CLIENTS, SECURITY_IDENTIFICATION, PIPE_TYPE_BYTE},
+        PIPE_REJECT_REMOTE_CLIENTS, SECURITY_IDENTIFICATION, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE},
     um::winnt::{GENERIC_READ, GENERIC_WRITE},
     um::errhandlingapi::{GetLastError},
     um::fileapi::{CreateFileW, ReadFile, WriteFile, OPEN_EXISTING},
@@ -38,16 +38,20 @@ pub struct PreStream {
     pipe: WinHandle,
 }
 
-pub struct StreamReadFuture<'a> {
-    stream: &'a mut Stream,
-    buffer: &'a mut [u8],
-    operation: Option<Operation>,
+
+#[derive(Clone)]
+pub struct Channel {
+    inner: Arc<_Channel>,
+    operation_source: OperationSource,
 }
 
-pub struct StreamWriteFuture<'a> {
-    stream: &'a mut Stream,
-    buffer: &'a [u8],
-    operation: Option<Operation>,
+struct _Channel {
+    pipe: WinHandle,
+}
+
+#[derive(Debug)]
+pub struct PreChannel {
+    pipe: WinHandle,
 }
 
 impl Stream {
@@ -69,12 +73,12 @@ impl Stream {
 }
 
 pub trait StreamExt: Sized {
-    unsafe fn from_raw_handle(handle: RawHandle, event_queue: &EventQueue) -> io::Result<Self>;
+    unsafe fn from_raw_handle(handle: RawHandle, queue: &Registrar) -> io::Result<Self>;
 }
 
 impl StreamExt for crate::Stream {
-    unsafe fn from_raw_handle(handle: RawHandle, event_queue: &EventQueue) -> io::Result<Self> {
-        let operation_source = event_queue.register_handle_raw(handle)?;
+    unsafe fn from_raw_handle(handle: RawHandle, queue: &Registrar) -> io::Result<Self> {
+        let operation_source = queue.register_handle_raw(handle)?;
 
         let inner = Stream {
             inner: Arc::new(_Stream {
@@ -109,6 +113,131 @@ impl fmt::Debug for _Stream {
     }
 }
 
+impl PreStream {
+    pub fn register(self, queue: &Registrar) -> io::Result<Stream> {
+        let operation_source = queue.register_handle(&self.pipe)?;
+        Ok(Stream {
+            inner: Arc::new(_Stream {
+                pipe: self.pipe,
+            }),
+            operation_source,
+        })
+    }
+
+    pub fn pair() -> io::Result<(PreStream, PreStream)> {
+        let (a, b) = raw_pipe_pair(PIPE_TYPE_BYTE | PIPE_READMODE_BYTE)?;
+        Ok((
+            PreStream { pipe: a },
+            PreStream { pipe: b },
+        ))
+    }
+}
+
+impl FromRawHandle for crate::PreStream {
+    unsafe fn from_raw_handle(handle: RawHandle) -> Self {
+        crate::PreStream {
+            inner: PreStream {
+                pipe: WinHandle::from_raw_unchecked(handle as _),
+            },
+        }
+    }
+}
+
+impl Channel {
+    pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> ChannelReadFuture<'a> {
+        ChannelReadFuture {
+            channel: self,
+            buffer,
+            operation: None,
+        }
+    }
+
+    pub fn write<'a>(&'a mut self, buffer: &'a [u8]) -> ChannelWriteFuture<'a> {
+        ChannelWriteFuture {
+            channel: self,
+            buffer,
+            operation: None,
+        }
+    }
+}
+
+pub trait ChannelExt: Sized {
+    unsafe fn from_raw_handle(handle: RawHandle, queue: &Registrar) -> io::Result<Self>;
+}
+
+impl ChannelExt for crate::Channel {
+    unsafe fn from_raw_handle(handle: RawHandle, queue: &Registrar) -> io::Result<Self> {
+        let operation_source = queue.register_handle_raw(handle)?;
+
+        let inner = Channel {
+            inner: Arc::new(_Channel {
+                pipe: WinHandle::from_raw_unchecked(handle as _),
+            }),
+            operation_source,
+        };
+
+        Ok(crate::Channel {
+            inner,
+        })
+    }
+}
+
+impl AsRawHandle for crate::Channel {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.inner.inner.pipe.get() as _
+    }
+}
+
+impl fmt::Debug for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &*self.inner)
+    }
+}
+
+impl fmt::Debug for _Channel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Channel")
+            .field("pipe", &self.pipe)
+            .finish()
+    }
+}
+
+impl PreChannel {
+    pub fn register(self, queue: &Registrar) -> io::Result<Channel> {
+        let operation_source = queue.register_handle(&self.pipe)?;
+        Ok(Channel {
+            inner: Arc::new(_Channel {
+                pipe: self.pipe,
+            }),
+            operation_source,
+        })
+    }
+
+    pub fn pair() -> io::Result<(PreChannel, PreChannel)> {
+        let (a, b) = raw_pipe_pair(PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE)?;
+        Ok((
+            PreChannel { pipe: a },
+            PreChannel { pipe: b },
+        ))
+    }
+}
+
+impl FromRawHandle for crate::PreChannel {
+    unsafe fn from_raw_handle(handle: RawHandle) -> Self {
+        crate::PreChannel {
+            inner: PreChannel {
+                pipe: WinHandle::from_raw_unchecked(handle as _),
+            },
+        }
+    }
+}
+
+pub struct StreamReadFuture<'a> {
+    stream: &'a mut Stream,
+    buffer: &'a mut [u8],
+    operation: Option<Operation>,
+}
+
 impl<'a> Future for StreamReadFuture<'a> {
     type Output = io::Result<usize>;
 
@@ -130,6 +259,12 @@ impl<'a> Future for StreamReadFuture<'a> {
             })
         }
     }
+}
+
+pub struct StreamWriteFuture<'a> {
+    stream: &'a mut Stream,
+    buffer: &'a [u8],
+    operation: Option<Operation>,
 }
 
 impl<'a> Future for StreamWriteFuture<'a> {
@@ -155,33 +290,60 @@ impl<'a> Future for StreamWriteFuture<'a> {
     }
 }
 
+pub struct ChannelReadFuture<'a> {
+    channel: &'a mut Channel,
+    buffer: &'a mut [u8],
+    operation: Option<Operation>,
+}
 
-impl PreStream {
-    pub fn register(self, event_queue: &EventQueue) -> io::Result<Stream> {
-        let operation_source = event_queue.register_handle(&self.pipe)?;
-        Ok(Stream {
-            inner: Arc::new(_Stream {
-                pipe: self.pipe,
-            }),
-            operation_source,
-        })
-    }
+impl<'a> Future for ChannelReadFuture<'a> {
+    type Output = io::Result<usize>;
 
-    pub fn pair() -> io::Result<(PreStream, PreStream)> {
-        let (a, b) = raw_pipe_pair(PIPE_TYPE_BYTE)?;
-        Ok((
-            PreStream { pipe: a },
-            PreStream { pipe: b },
-        ))
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
+        unsafe {
+            let this = Pin::get_mut_unchecked(self);
+            let pipe = &this.channel.inner.pipe;
+            let buffer = &mut this.buffer;
+            Operation::start_or_poll(Pin::new_unchecked(&mut this.operation),  &mut this.channel.operation_source, waker, move |overlapped| {
+                let mut bytes_read: DWORD = 0;
+                winapi_bool_call!(ReadFile(
+                    pipe.get(),
+                    buffer.as_mut_ptr() as _,
+                    buffer.len() as DWORD,
+                    &mut bytes_read,
+                    overlapped,
+                ))?;
+                Ok(bytes_read as usize)
+            })
+        }
     }
 }
 
-impl FromRawHandle for crate::PreStream {
-    unsafe fn from_raw_handle(handle: RawHandle) -> Self {
-        crate::PreStream {
-            inner: PreStream {
-                pipe: WinHandle::from_raw_unchecked(handle as _),
-            },
+pub struct ChannelWriteFuture<'a> {
+    channel: &'a mut Channel,
+    buffer: &'a [u8],
+    operation: Option<Operation>,
+}
+
+impl<'a> Future for ChannelWriteFuture<'a> {
+    type Output = io::Result<usize>;
+
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
+        unsafe {
+            let this = Pin::get_mut_unchecked(self);
+            let pipe = &this.channel.inner.pipe;
+            let buffer = this.buffer;
+            Operation::start_or_poll(Pin::new_unchecked(&mut this.operation), &mut this.channel.operation_source, waker, move |overlapped| {
+                let mut bytes_written: DWORD = 0;
+                winapi_bool_call!(WriteFile(
+                    pipe.get(),
+                    buffer.as_ptr() as _,
+                    buffer.len() as DWORD,
+                    &mut bytes_written,
+                    overlapped,
+                ))?;
+                Ok(bytes_written as usize)
+            })
         }
     }
 }

@@ -108,6 +108,16 @@ impl LocalExecutor {
             }
         })
     }
+
+    pub fn spawn<F>(&mut self, future: F) where
+        F: Future<Output = ()> + 'static
+    {
+        self.spawn_obj(LocalFutureObj::new(Box::new(future)));
+    }
+
+    pub fn spawn_obj(&mut self, future: LocalFutureObj<'static, ()>) {
+        self.spanwed_futures.push(future);
+    }
 }
 
 scoped_thread_local! {
