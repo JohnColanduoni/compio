@@ -1,4 +1,5 @@
 #![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
+#![cfg_attr(unix, feature(min_const_fn))]
 #![cfg_attr(test, feature(gen_future))]
 
 #[macro_use]
@@ -111,12 +112,12 @@ impl Channel {
         ))
     }
 
-    pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
-        self.inner.read(buffer)
+    pub fn recv<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
+        self.inner.recv(buffer)
     }
 
-    pub fn write<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
-        self.inner.write(buffer)
+    pub fn send<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output=io::Result<()>> + Send + 'a {
+        self.inner.send(buffer)
     }
 }
 
@@ -178,7 +179,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let event_queue = EventQueue::new().unwrap();
-        let (_a, _b) = Stream::pair(&event_queue.registrar().unwrap()).unwrap();
+        let (_a, _b) = Stream::pair(&event_queue.registrar()).unwrap();
     }
 
     #[test]
@@ -194,7 +195,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut b) = Stream::pair(&executor.registrar().unwrap()).unwrap(); 
+        let (mut a, mut b) = Stream::pair(&executor.registrar()).unwrap(); 
 
         executor.block_on(async {
             let read = async {
@@ -217,7 +218,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut _b) = Stream::pair(&executor.registrar().unwrap()).unwrap(); 
+        let (mut a, mut _b) = Stream::pair(&executor.registrar()).unwrap(); 
 
         executor.block_on(async {
             let read = async {
@@ -229,7 +230,10 @@ mod tests {
             pin_mut!(read);
             assert!(poll_with_tls_waker(read).is_pending());
         });
-        assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        // Make sure th IOCP received the cancellation notification
+        if cfg!(target_os = "windows") {
+            assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        }
     }
 
     #[test]
@@ -237,21 +241,21 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut b) = Channel::pair(&executor.registrar().unwrap()).unwrap(); 
+        let (mut a, mut b) = Channel::pair(&executor.registrar()).unwrap(); 
 
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                let byte_count = await!(a.recv(&mut buffer)).unwrap();
                 buffer.truncate(byte_count);
                 let mut buffer2 = vec![0u8; 64];
-                let byte_count2 = await!(a.read(&mut buffer2)).unwrap();
+                let byte_count2 = await!(a.recv(&mut buffer2)).unwrap();
                 buffer2.truncate(byte_count2);
                 (buffer, buffer2)
             };
             let write = async move {
-                await!(b.write(b"Hello World!")).unwrap();
-                await!(b.write(b":)")).unwrap();
+                await!(b.send(b"Hello World!")).unwrap();
+                await!(b.send(b":)")).unwrap();
                 mem::drop(b);
             };
             let (_write, read) = join!(write, read);
@@ -266,18 +270,21 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let (mut a, mut _b) = Channel::pair(&executor.registrar().unwrap()).unwrap(); 
+        let (mut a, mut _b) = Channel::pair(&executor.registrar()).unwrap(); 
 
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                let byte_count = await!(a.recv(&mut buffer)).unwrap();
                 buffer.truncate(byte_count);
                 buffer
             };
             pin_mut!(read);
             assert!(poll_with_tls_waker(read).is_pending());
         });
-        assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        // Make sure th IOCP received the cancellation notification
+        if cfg!(target_os = "windows") {
+            assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        }
     }
 }

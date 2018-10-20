@@ -28,6 +28,9 @@ impl Drop for _EventQueue {
     }
 }
 
+#[derive(Clone)]
+pub struct Registrar(Arc<_EventQueue>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Filter(i16);
 
@@ -93,6 +96,10 @@ impl EventQueue {
         })))
     }
 
+    pub fn registrar(&self) -> Registrar {
+        Registrar(self.0.clone())
+    }
+
     pub fn turn(&self, max_wait: Option<Duration>, max_events: Option<usize>) -> io::Result<usize> {
         unsafe {
             let mut events: [libc::kevent; 64] = mem::zeroed();
@@ -152,6 +159,16 @@ impl EventQueue {
         }
     }
 
+
+    pub fn add_user_event(&self, handler: UserEventHandler) -> io::Result<UserEvent> {
+        Ok(UserEvent(Arc::new(_UserEvent {
+            queue: self.0.clone(),
+            handler,
+        })))
+    }
+}
+
+impl Registrar {
     pub fn register_fd(&self, source: RawFd) -> io::Result<Registration> {
         {
             let mut registered_fds = self.0.registered_fds.lock().unwrap();
@@ -169,12 +186,21 @@ impl EventQueue {
             wakers: Default::default(),
         })
     }
+}
 
-    pub fn add_user_event(&self, handler: UserEventHandler) -> io::Result<UserEvent> {
-        Ok(UserEvent(Arc::new(_UserEvent {
-            queue: self.0.clone(),
-            handler,
-        })))
+impl fmt::Debug for EventQueue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("EventQueue")
+            .field("kqueue", &format_args!("{:?}", self.0.fd))
+            .finish()
+    }
+}
+
+impl fmt::Debug for Registrar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Registrar")
+            .field("kqueue", &format_args!("{:?}", self.0.fd))
+            .finish()
     }
 }
 

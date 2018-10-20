@@ -56,7 +56,7 @@ impl LocalExecutor {
         })
     }
 
-    pub fn registrar(&self) -> io::Result<Registrar> {
+    pub fn registrar(&self) -> Registrar {
         self.shared.queue.registrar()
     }
 

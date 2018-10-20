@@ -22,7 +22,7 @@ impl Filter {
 #[derive(Clone, Debug)]
 pub struct Registration(sys_queue::Registration);
 
-pub trait EventQueueExt {
+pub trait RegistrarExt {
     /**
      * Registers a file descriptor with the [EventQueue](crate::queue::EventQueue).
      * 
@@ -33,7 +33,7 @@ pub trait EventQueueExt {
     fn register_fd(&self, source: RawFd) -> io::Result<Registration>;
 }
 
-impl EventQueueExt for crate::queue::EventQueue {
+impl RegistrarExt for crate::queue::Registrar {
     fn register_fd(&self, source: RawFd) -> io::Result<Registration> {
         Ok(Registration(self.inner.register_fd(source)?))
     }

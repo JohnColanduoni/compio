@@ -33,9 +33,8 @@ impl EventQueue {
         Ok(UserEvent { inner })
     }
 
-    pub fn registrar(&self) -> io::Result<Registrar> {
-        let inner = self.inner.registrar()?;
-        Ok(Registrar { inner })
+    pub fn registrar(&self) -> Registrar {
+        Registrar { inner: self.inner.registrar() }
     }
 }
 
