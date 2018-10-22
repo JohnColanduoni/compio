@@ -349,6 +349,8 @@ impl<'a> Future for ChannelRecvFuture<'a> {
                 iovec.iov_len = self.buffer.len() as _;
                 let cmsg = &mut *(cmsg_buf.as_mut_ptr() as *mut libc::cmsghdr);
                 cmsg.cmsg_len = cmsg_buf.len() as _;
+                cmsg.cmsg_level = libc::SOL_SOCKET;
+                cmsg.cmsg_type = libc::SCM_RIGHTS;
                 libc::recvmsg(self.channel.inner.fd, &mut msg, 0)
             };
             if byte_count < 0 {
@@ -400,8 +402,13 @@ impl<'a> Future for ChannelSendFuture<'a> {
                 iovec.iov_len = self.buffer.len() as _;
                 libc::sendmsg(self.channel.inner.fd, &msg, 0)
             };
-            if byte_count < 0 {
-                let err = io::Error::last_os_error();
+            if byte_count != self.buffer.len() as isize {
+                let err;
+                if byte_count < 0 {
+                    err = io::Error::last_os_error();
+                } else {
+                    err = io::Error::new(io::ErrorKind::Other, "entire message was not sent");
+                }
                 if err.kind() == io::ErrorKind::WouldBlock {
                     self.channel.registration.clear_ready(Filter::WRITE, waker)?;
                     return Poll::Pending;

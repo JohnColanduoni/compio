@@ -1,6 +1,9 @@
 [workspace]
 members = ["./", "compio-core", "compio-threadpool", "compio-local", "compio-net", "compio-ipc"]
 
+[profile.bench]
+debug = 1
+
 [package]
 name = "compio"
 version = "0.1.0"
