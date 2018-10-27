@@ -21,4 +21,9 @@ pub mod os {
     pub mod windows {
         pub use crate::platform::queue::{RegistrarExt, Operation, OperationSource};
     }
+
+    #[cfg(target_os = "macos")]
+    pub mod macos {
+        pub use crate::platform::queue::mach::{RegistrarExt, PortRegistration, RawPort};
+    }
 }

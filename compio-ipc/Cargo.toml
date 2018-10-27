@@ -20,6 +20,9 @@ winhandle = "0.3.0"
 widestring = "0.4.0"
 uuid = { version = "0.7.1", features = ["v4"] }
 
+[build-dependencies]
+bindgen = "0.42.3"
+
 [dev-dependencies]
 compio-local = { path = "../compio-local" }
 

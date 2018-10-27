@@ -1,11 +1,12 @@
 #![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
 #![cfg_attr(unix, feature(min_const_fn))]
+#![cfg_attr(target_os = "macos", feature(try_from))]
 #![cfg_attr(test, feature(gen_future))]
 
 #[macro_use]
 extern crate log;
 
-#[cfg_attr(unix, path = "platform/unix.rs")]
+#[cfg_attr(unix, path = "platform/unix/mod.rs")]
 #[cfg_attr(target_os = "windows", path = "platform/windows.rs")]
 mod platform;
 
@@ -18,6 +19,11 @@ pub mod os {
     #[cfg(target_os = "windows")]
     pub mod windows {
         pub use crate::platform::{StreamExt};
+    }
+
+    #[cfg(target_os = "macos")]
+    pub mod macos {
+        pub use crate::platform::mach::{Port, PortMsg, PortMsgBuffer};
     }
 }
 
@@ -230,10 +236,33 @@ mod tests {
             pin_mut!(read);
             assert!(poll_with_tls_waker(read).is_pending());
         });
-        // Make sure th IOCP received the cancellation notification
+        // Make sure the IOCP received the cancellation notification
         if cfg!(target_os = "windows") {
             assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
         }
+    }
+
+    #[test]
+    fn channel_simple_send_recv() {
+        let _ = env_logger::try_init();
+
+        let mut executor = LocalExecutor::new().unwrap();
+        let (mut a, mut b) = Channel::pair(&executor.registrar()).unwrap(); 
+
+        executor.block_on(async {
+            let read = async {
+                let mut buffer = vec![0u8; 64];
+                let byte_count = await!(a.recv(&mut buffer)).unwrap();
+                buffer.truncate(byte_count);
+                buffer
+            };
+            let write = async {
+                await!(b.send(b"Hello World!")).unwrap()
+            };
+            let (read, _write) = join!(read, write);
+
+            assert_eq!(b"Hello World!", &*read);
+        });
     }
 
     #[test]
@@ -254,13 +283,13 @@ mod tests {
                 (buffer, buffer2)
             };
             let write = async move {
-                await!(b.send(b"Hello World!")).unwrap();
+                await!(b.send(b"Hello World!!")).unwrap();
                 await!(b.send(b":)")).unwrap();
                 mem::drop(b);
             };
             let (_write, read) = join!(write, read);
 
-            assert_eq!(b"Hello World!", &*read.0);
+            assert_eq!(b"Hello World!!", &*read.0);
             assert_eq!(b":)", &*read.1);
         });
     }
@@ -282,7 +311,7 @@ mod tests {
             pin_mut!(read);
             assert!(poll_with_tls_waker(read).is_pending());
         });
-        // Make sure th IOCP received the cancellation notification
+        // Make sure the IOCP received the cancellation notification
         if cfg!(target_os = "windows") {
             assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
         }

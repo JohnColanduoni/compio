@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+pub mod mach;
+
 use crate::queue::UserEventHandler;
 
 use std::{io, mem, ptr, cmp, fmt, ops};
@@ -19,6 +22,8 @@ pub struct EventQueue(Arc<_EventQueue>);
 struct _EventQueue {
     fd: RawFd,
     registered_fds: Mutex<HashSet<RawFd>>,
+    #[cfg(target_os = "macos")]
+    registered_mach_ports: Mutex<HashSet<self::mach::RawPort>>,
 }
 
 impl Drop for _EventQueue {
@@ -93,6 +98,8 @@ impl EventQueue {
         Ok(EventQueue(Arc::new(_EventQueue {
             fd,
             registered_fds: Default::default(),
+            #[cfg(target_os = "macos")]
+            registered_mach_ports: Default::default(),
         })))
     }
 
@@ -143,6 +150,16 @@ impl EventQueue {
                             }
                         }
                     },
+                    #[cfg(target_os = "macos")]
+                    libc::EVFILT_MACHPORT => {
+                        // ident is a port, and udata is an Arc<_PortRegistration>
+                        let registration = Arc::from_raw(event.udata as *const self::mach::_PortRegistration);
+                        if !registration.ready.swap(true, Ordering::SeqCst) {
+                            while let Some(waker) = registration.listeners.try_pop() {
+                                waker.wake();
+                            }
+                        }
+                    }
                     libc::EVFILT_USER => {
                         println!("received user event {:?} (flags: {:?})", event.data, event.flags);
                         // ident is a Arc<_UserEvent>, and data is a user-specified data parameter

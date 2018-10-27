@@ -21,7 +21,7 @@ macro_rules! try_libc {
 }
 
 #[cfg(target_os = "macos")]
-#[path = "kqueue.rs"]
+#[path = "kqueue/mod.rs"]
 pub(crate) mod queue;
 
 #[cfg(target_os = "windows")]
