@@ -113,7 +113,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let registrar = executor.registrar().unwrap();
+        let registrar = executor.registrar();
         executor.block_on(async {
             let mut listener = TcpListener::bind(&SocketAddr::from_str("127.0.0.1:0").unwrap(), &registrar).unwrap();
             let connect = TcpStream::connect(listener.local_addr().unwrap(), &registrar);
@@ -144,7 +144,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let registrar = executor.registrar().unwrap();
+        let registrar = executor.registrar();
         executor.block_on(async {
             let mut listener = TcpListener::bind(&SocketAddr::from_str("[::1]:0").unwrap(), &registrar).unwrap();
             let connect = TcpStream::connect(listener.local_addr().unwrap(), &registrar);
@@ -175,13 +175,16 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut executor = LocalExecutor::new().unwrap();
-        let registrar = executor.registrar().unwrap();
+        let registrar = executor.registrar();
         executor.block_on(async {
             let mut listener = TcpListener::bind(&SocketAddr::from_str("127.0.0.1:0").unwrap(), &registrar).unwrap();
             let accept = listener.accept();
             pin_mut!(accept);
             assert!(poll_with_tls_waker(accept).is_pending());
         });
-        assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        // Make sure cancellation was received by IOCP on Windows
+        if cfg!(target_os = "windows") {
+            assert_eq!(1, executor.queue().turn(Some(Duration::from_millis(0)), None).unwrap());
+        }
     }
 }
