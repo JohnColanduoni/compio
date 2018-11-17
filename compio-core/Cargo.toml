@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4.5"
-futures_core = { package = "futures-core-preview", version = "=0.3.0-alpha.7" }
+futures_core = { package = "futures-core-preview", version = "=0.3.0-alpha.9" }
 crossbeam = "0.4.1"
 
 [target.'cfg(unix)'.dependencies]
@@ -16,7 +16,7 @@ libc = "0.2.43"
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.6", features = ["minwindef", "minwinbase", "winbase", "handleapi", "ioapiset", "winsock2"] }
 winhandle = "0.3.0"
-futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.7" }
+futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.9" }
 
 [dev-dependencies]
 nix = "0.11.0"

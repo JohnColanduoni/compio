@@ -9,4 +9,4 @@ edition = "2018"
 compio-core = { version = "0.1.0", path = "../compio-core" }
 
 num_cpus = "1.8"
-futures_core = { package = "futures-core-preview", version = "=0.3.0-alpha.7" }
+futures_core = { package = "futures-core-preview", version = "=0.3.0-alpha.9" }

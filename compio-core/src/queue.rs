@@ -144,7 +144,7 @@ mod tests {
             let mut tx = unsafe { File::from_raw_fd(tx) };
             let flags = unsafe { libc::fcntl(rx.as_raw_fd(), libc::F_GETFL, 0) };
             unsafe { libc::fcntl(rx.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK); }
-            let mut registration = queue.register_fd(rx.as_raw_fd()).unwrap();
+            let mut registration = queue.registrar().register_fd(rx.as_raw_fd()).unwrap();
 
             let waker = Arc::new(CountWaker {
                 count: AtomicUsize::new(0),
