@@ -138,20 +138,27 @@ impl<'a> Future for ChannelRecvFuture<'a> {
     fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
         try_ready!(self.channel.registration.poll_ready(Filter::READ, waker));
 
-        unsafe {
-            let byte_count = libc::recv(self.channel.inner.fd, self.buffer.as_mut_ptr() as _, self.buffer.len() as libc::size_t, 0);
-            if byte_count < 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    self.channel.registration.clear_ready(Filter::READ, waker)?;
-                    return Poll::Pending;
-                } else {
-                    debug!("recv failed: {}", err);
-                    return Poll::Ready(Err(err));
+        let byte_count = loop {
+            unsafe {
+                let byte_count = libc::recv(self.channel.inner.fd, self.buffer.as_mut_ptr() as _, self.buffer.len() as libc::size_t, 0);
+                if byte_count < 0 {
+                    let err = io::Error::last_os_error();
+                    match err.kind() {
+                        io::ErrorKind::WouldBlock => {
+                            self.channel.registration.clear_ready(Filter::READ, waker)?;
+                            return Poll::Pending;
+                        },
+                        io::ErrorKind::Interrupted => continue,
+                        _ => {
+                            debug!("recv failed: {}", err);
+                            return Poll::Ready(Err(err));
+                        }
+                    }
                 }
+                break byte_count;
             }
-            Poll::Ready(Ok(byte_count as usize))
-        }
+        };
+        Poll::Ready(Ok(byte_count as usize))
     }
 }
 
@@ -168,24 +175,31 @@ impl<'a> Future for ChannelSendFuture<'a> {
     fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<()>> {
         try_ready!(self.channel.registration.poll_ready(Filter::WRITE, waker));
 
-        unsafe {
-            let byte_count = libc::send(self.channel.inner.fd, self.buffer.as_ptr() as _, self.buffer.len() as libc::size_t, 0);
-            if byte_count != self.buffer.len() as isize {
-                let err;
-                if byte_count < 0 {
-                    err = io::Error::last_os_error();
-                } else {
-                    err = io::Error::new(io::ErrorKind::Other, "entire message was not sent");
+        loop {
+            unsafe {
+                let byte_count = libc::send(self.channel.inner.fd, self.buffer.as_ptr() as _, self.buffer.len() as libc::size_t, 0);
+                if byte_count != self.buffer.len() as isize {
+                    let err;
+                    if byte_count < 0 {
+                        err = io::Error::last_os_error();
+                    } else {
+                        err = io::Error::new(io::ErrorKind::Other, "entire message was not sent");
+                    }
+                    match err.kind() {
+                        io::ErrorKind::WouldBlock => {
+                            self.channel.registration.clear_ready(Filter::WRITE, waker)?;
+                            return Poll::Pending;
+                        },
+                        io::ErrorKind::Interrupted => continue,
+                        _ => {
+                            debug!("send failed: {}", err);
+                            return Poll::Ready(Err(err));
+                        },
+                    }
                 }
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    self.channel.registration.clear_ready(Filter::WRITE, waker)?;
-                    return Poll::Pending;
-                } else {
-                    debug!("send failed: {}", err);
-                    return Poll::Ready(Err(err));
-                }
+                break;
             }
-            Poll::Ready(Ok(()))
         }
+        Poll::Ready(Ok(()))
     }
 }

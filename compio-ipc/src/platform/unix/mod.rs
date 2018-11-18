@@ -166,19 +166,27 @@ impl<'a> Future for StreamReadFuture<'a> {
     fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
         try_ready!(self.stream.registration.poll_ready(Filter::READ, waker));
 
-        unsafe {
-            let byte_count = libc::recv(self.stream.inner.fd, self.buffer.as_mut_ptr() as _, self.buffer.len() as libc::size_t, 0);
-            if byte_count < 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    self.stream.registration.clear_ready(Filter::READ, waker)?;
-                    return Poll::Pending;
-                } else {
-                    return Poll::Ready(Err(err));
+        let byte_count = loop {
+            unsafe {
+                let byte_count = libc::recv(self.stream.inner.fd, self.buffer.as_mut_ptr() as _, self.buffer.len() as libc::size_t, 0);
+                if byte_count < 0 {
+                    let err = io::Error::last_os_error();
+                    match err.kind() {
+                        io::ErrorKind::WouldBlock => {
+                            self.stream.registration.clear_ready(Filter::READ, waker)?;
+                            return Poll::Pending;
+                        },
+                        io::ErrorKind::Interrupted => continue,
+                        _ => {
+                            return Poll::Ready(Err(err));
+                        },
+                    }
                 }
+                break byte_count;
             }
-            Poll::Ready(Ok(byte_count as usize))
-        }
+        };
+        
+        Poll::Ready(Ok(byte_count as usize))
     }
 }
 
@@ -195,19 +203,26 @@ impl<'a> Future for StreamWriteFuture<'a> {
     fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
         try_ready!(self.stream.registration.poll_ready(Filter::WRITE, waker));
 
-        unsafe {
-            let byte_count = libc::send(self.stream.inner.fd, self.buffer.as_ptr() as _, self.buffer.len() as libc::size_t, 0);
-            if byte_count < 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    self.stream.registration.clear_ready(Filter::WRITE, waker)?;
-                    return Poll::Pending;
-                } else {
-                    return Poll::Ready(Err(err));
+        let byte_count = loop {
+            unsafe {
+                let byte_count = libc::send(self.stream.inner.fd, self.buffer.as_ptr() as _, self.buffer.len() as libc::size_t, 0);
+                if byte_count < 0 {
+                    let err = io::Error::last_os_error();
+                    match err.kind() {
+                        io::ErrorKind::WouldBlock =>  {
+                            self.stream.registration.clear_ready(Filter::WRITE, waker)?;
+                            return Poll::Pending;
+                        },
+                        io::ErrorKind::Interrupted => {},
+                        _ => {
+                            return Poll::Ready(Err(err));
+                        },
+                    }
                 }
+                break byte_count;
             }
-            Poll::Ready(Ok(byte_count as usize))
-        }
+        };
+        Poll::Ready(Ok(byte_count as usize))
     }
 }
 
