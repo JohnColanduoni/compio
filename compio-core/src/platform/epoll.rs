@@ -146,11 +146,13 @@ impl EventQueue {
             let events = &events[0..(event_count as usize)];
 
             for event in events.iter() {
-                let registration = &*(event.u64 as usize as *const _Registration);
                 let filter = FilterSet(event.events);
 
                 for event_type in filter.iter() {
-                    if let Some(state) = registration.states.get(event_type) {
+                    // Only EPOLLIN and EPOLLOUT come with a positive ref count on the _Registration
+                    if event_type == Filter::READ || event_type == Filter::WRITE {
+                        let registration = Arc::from_raw(event.u64 as usize as *const _Registration);
+                        let state = &registration.states[event_type];
                         let mut sequence = state.sequence.load(Ordering::SeqCst);
                         loop {
                             if sequence % 2 == 1 {
