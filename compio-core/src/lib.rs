@@ -12,11 +12,6 @@ pub mod os {
         pub use crate::platform::unix::{Filter, Registration, RegistrarExt};
     }
 
-    #[cfg(target_os = "macos")]
-    pub mod kqueue {
-        pub use crate::platform::queue::{EventQueueExt};
-    }
-
     #[cfg(target_os = "windows")]
     pub mod windows {
         pub use crate::platform::queue::{RegistrarExt, Operation, OperationSource};

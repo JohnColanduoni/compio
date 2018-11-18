@@ -229,10 +229,6 @@ impl Default for RegistrationState {
     }
 }
 
-pub trait EventQueueExt {
-
-}
-
 impl Registration {
     pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
         let state = &self.inner.states[filter];
