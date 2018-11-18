@@ -47,7 +47,16 @@ pub struct Registration {
     wakers: FilterCollection<Option<(usize, Waker)>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u32)]
+enum TokenKind {
+    Registration,
+    UserEvent,
+}
+
+#[repr(C)] // _Registration must start with TokenKind
 struct _Registration {
+    token_kind: TokenKind,
     // TODO: this pointer will be upgraded whenever a filter registration is made, which may cause a lot of fighting over the reference count
     // for this pointer. Maybe just warn when EventQueue is dropped and the Arc is not unique?
     queue: Weak<_EventQueue>,
@@ -93,14 +102,20 @@ impl Drop for RegistrationState {
 
 pub struct UserEvent(Arc<_UserEvent>);
 
+#[repr(C)] // _UserEvent must start with TokenKind
 struct _UserEvent {
+    token_kind: TokenKind,
     queue: Arc<_EventQueue>,
+    event_fd: RawFd,
     handler: UserEventHandler,
+
+    armed: AtomicBool,
+    values: SegQueue<usize>,
 }
 
 impl Drop for _UserEvent {
     fn drop(&mut self) {
-        // TODO: unregister event from queue
+        unsafe { libc::close(self.event_fd); }
     }
 }
 
@@ -121,27 +136,34 @@ impl EventQueue {
         unsafe {
             let mut events: [libc::epoll_event; 64] = mem::zeroed();
 
-            let event_count = libc::epoll_wait(
-                self.0.fd,
-                events.as_mut_ptr(),
-                max_events.map(|x| cmp::min(x, events.len())).unwrap_or(events.len()) as c_int,
-                max_wait
-                    .map(|x| x.as_secs().saturating_mul(1000).saturating_add(x.subsec_millis() as u64))
-                    .map(|x| if x > libc::INT_MAX as u64 {
-                        libc::INT_MAX
-                    } else if x < 1 {
-                        1 // If the value is less than one millisecond, ensure we wait one millisecond instead of waiting forever
-                    } else {
-                        x as c_int
-                    })
-                    .unwrap_or(0),
-            );
+            let event_count = loop {
+                let event_count = libc::epoll_wait(
+                    self.0.fd,
+                    events.as_mut_ptr(),
+                    max_events.map(|x| cmp::min(x, events.len())).unwrap_or(events.len()) as c_int,
+                    max_wait
+                        .map(|x| x.as_secs().saturating_mul(1000).saturating_add(x.subsec_millis() as u64))
+                        .map(|x| if x > libc::INT_MAX as u64 {
+                            libc::INT_MAX
+                        } else if x < 1 {
+                            1 // If the value is less than one millisecond, ensure we wait one millisecond instead of waiting forever
+                        } else {
+                            x as c_int
+                        })
+                        .unwrap_or(0),
+                );
 
-            if event_count < 0 {
-                let err = io::Error::last_os_error();
-                error!("epoll_wait failed: {}", err);
-                return Err(err);
-            }
+                if event_count < 0 {
+                    let err = io::Error::last_os_error();
+                    if err.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    error!("epoll_wait failed: {}", err);
+                    return Err(err);
+                } else {
+                    break event_count;
+                }
+            };
 
             let events = &events[0..(event_count as usize)];
 
@@ -149,28 +171,46 @@ impl EventQueue {
                 let filter = FilterSet(event.events);
 
                 for event_type in filter.iter() {
-                    // Only EPOLLIN and EPOLLOUT come with a positive ref count on the _Registration
+                    // Only EPOLLIN and EPOLLOUT come with a positive ref count on the _Registration/_UserEvent
                     if event_type == Filter::READ || event_type == Filter::WRITE {
-                        let registration = Arc::from_raw(event.u64 as usize as *const _Registration);
-                        let state = &registration.states[event_type];
-                        let mut sequence = state.sequence.load(Ordering::SeqCst);
-                        loop {
-                            if sequence % 2 == 1 {
-                                match state.sequence.compare_exchange_weak(sequence, sequence.wrapping_add(1), Ordering::SeqCst, Ordering::SeqCst) {
-                                    Ok(_) => {
-                                        while let Some(waker) = state.listeners.try_pop() {
-                                            waker.wake();
+                        let token_kind = unsafe { *(event.u64 as usize as *const TokenKind) };
+                        match token_kind {
+                            TokenKind::Registration => {
+                                let registration = Arc::from_raw(event.u64 as usize as *const _Registration);
+                                let state = &registration.states[event_type];
+                                let old_seq = state.sequence.fetch_add(1, Ordering::SeqCst);
+                                assert!(old_seq % 2 == 1, "registration should only be present in EPOLLIN or EPOLLOUT event if it was most recently added to epoll");
+                                while let Some(waker) = state.listeners.try_pop() {
+                                    waker.wake();
+                                }
+                            },
+                            TokenKind::UserEvent => {
+                                let user_event = Arc::from_raw(event.u64 as usize as *const _UserEvent);
+                                if cfg!(debug_assertions) {
+                                    let old_armed = user_event.armed.swap(false, Ordering::SeqCst);
+                                    assert!(old_armed, "UserEvent should only be present in EPOLLIN or EPOLLOUT event if it was most recently added to epoll");
+                                } else {
+                                    user_event.armed.store(false, Ordering::SeqCst);
+                                }
+                                loop {
+                                    let mut count = [0u8; 8];
+                                    if libc::read(user_event.event_fd, count.as_mut_ptr() as _, count.len()) < 0 {
+                                        let err = io::Error::last_os_error();
+                                        match err.kind() {
+                                            io::ErrorKind::Interrupted => continue,
+                                            io::ErrorKind::WouldBlock => {
+                                                panic!("inconsistent state of eventfd backing UserEvent");
+                                            },
+                                            _ => return Err(err),
                                         }
+                                    } else {
                                         break;
-                                    },
-                                    Err(new_seq) => {
-                                        sequence = new_seq;
-                                        continue;
                                     }
                                 }
-                            } else {
-                                break
-                            }
+                                while let Some(value) = user_event.values.try_pop() {
+                                    (user_event.handler)(value);
+                                }
+                            },
                         }
                     }
                 }
@@ -182,10 +222,27 @@ impl EventQueue {
 
 
     pub fn add_user_event(&self, handler: UserEventHandler) -> io::Result<UserEvent> {
-        Ok(UserEvent(Arc::new(_UserEvent {
+        let event_fd = unsafe { try_libc!(fd: libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK), "failed to create eventfd for UserEvent: {}") };
+
+        let inner = Arc::new(_UserEvent {
+            token_kind: TokenKind::UserEvent,
             queue: self.0.clone(),
+            event_fd,
             handler,
-        })))
+
+            armed: AtomicBool::new(false),
+            values: Default::default(),
+        });
+
+        unsafe {
+            let mut event = libc::epoll_event {
+                events: 0,
+                u64: &*inner as *const _UserEvent as usize as u64,
+            };
+            try_libc!(libc::epoll_ctl(self.0.fd, libc::EPOLL_CTL_ADD, inner.event_fd, &mut event), "failed to add eventfd for UserEvent to epoll: {}");
+        }
+
+        Ok(UserEvent(inner))
     }
 }
 
@@ -202,6 +259,7 @@ impl Registrar {
 
         let registration = Registration {
             inner: Arc::new(_Registration {
+                token_kind: TokenKind::Registration,
                 queue: Arc::downgrade(&self.0),
                 fd: source,
                 states,
@@ -209,7 +267,7 @@ impl Registrar {
             wakers: Default::default(),
         };
 
-        for (filter, state) in registration.inner.states.iter() {
+        for (_filter, state) in registration.inner.states.iter() {
             let mut event = libc::epoll_event {
                 events: 0,
                 u64: &*registration.inner as *const _Registration as usize as u64,
@@ -389,7 +447,36 @@ impl fmt::Debug for FilterSet {
 
 impl UserEvent {
     pub fn trigger(&self, data: usize) -> io::Result<()> {
-        unimplemented!()
+        if !self.0.armed.swap(true, Ordering::SeqCst) {
+            self.0.values.push(data);
+
+            unsafe {
+                let ptr = Arc::into_raw(self.0.clone());
+                let mut event = libc::epoll_event {
+                    events: libc::EPOLLIN as u32 | libc::EPOLLET as u32 | libc::EPOLLONESHOT as u32,
+                    u64: ptr as usize as u64,
+                };
+                try_libc!(libc::epoll_ctl(self.0.queue.fd, libc::EPOLL_CTL_MOD, self.0.event_fd, &mut event), "failed to arm eventfd for UserEvent in epoll: {}");
+            }
+
+            loop {
+                unsafe { 
+                    let buffer = 1u64;
+                    if libc::write(self.0.event_fd, &buffer as *const u64 as _, mem::size_of::<u64>()) < 0 {
+                        let err = io::Error::last_os_error();
+                        if err.kind() == io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                    break
+                }
+            }
+        } else {
+            self.0.values.push(data);
+        }
+
+        Ok(())
     }
 }
 
