@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 compio-core = { version = "0.1.0", path = "../compio-core" }
+compio-traits = { version = "0.1.0", path = "../compio-traits" }
 
 log = "0.4.5"
 futures_util = { package = "futures-util-preview", version = "=0.3.0-alpha.9" }

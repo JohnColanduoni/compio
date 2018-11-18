@@ -1,0 +1,12 @@
+[package]
+name = "compio-traits"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+cfg-if = "0.1"
+bytes = { version = "0.4.11", optional = true }
+
+[features]
+default = ["bytes_compat"]
+bytes_compat = ["bytes"]

@@ -1,5 +1,5 @@
 [workspace]
-members = ["./", "compio-core", "compio-threadpool", "compio-local", "compio-net", "compio-ipc"]
+members = ["./", "compio-core", "compio-traits", "compio-threadpool", "compio-local", "compio-net", "compio-ipc"]
 
 [profile.bench]
 debug = 1

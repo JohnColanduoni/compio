@@ -1,4 +1,5 @@
 #![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
+#![feature(existential_type)]
 #![cfg_attr(unix, feature(min_const_fn))]
 #![cfg_attr(target_os = "macos", feature(try_from))]
 #![cfg_attr(test, feature(gen_future))]
@@ -31,6 +32,7 @@ use std::{io, fmt};
 use std::future::Future;
 
 use compio_core::queue::Registrar;
+use compio_traits::{AsyncRead, AsyncWrite, PinnedBuffer, PinnedBufferMut};
 
 #[derive(Clone)]
 pub struct Stream {
@@ -70,15 +72,36 @@ impl Stream {
             b.register(queue)?,
         ))
     }
+}
 
-    pub fn read<'a>(&'a mut self, buffer: &'a mut [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
+impl<'a> AsyncRead<'a> for Stream {
+    type Read = platform::StreamReadFuture<'a>;
+    type ReadZeroCopy = platform::StreamReadFuture<'a>;
+
+    fn read(&'a mut self, buffer: &'a mut [u8]) -> Self::Read {
         self.inner.read(buffer)
     }
 
-    pub fn write<'a>(&'a mut self, buffer: &'a [u8]) -> impl Future<Output=io::Result<usize>> + Send + 'a {
-        self.inner.write(buffer)
+    fn read_zero_copy<B: PinnedBufferMut>(&'a mut self, buffer: &'a mut B) -> Self::ReadZeroCopy {
+        // TODO: windows implementation
+        self.inner.read(buffer.bytes_mut())
     }
 }
+
+impl<'a> AsyncWrite<'a> for Stream {
+    type Write = platform::StreamWriteFuture<'a>;
+    type WriteZeroCopy = platform::StreamWriteFuture<'a>;
+
+    fn write(&'a mut self, buffer: &'a [u8]) -> Self::Write {
+        self.inner.write(buffer)
+    }
+
+    fn write_zero_copy<B: PinnedBuffer>(&'a mut self, buffer: &'a mut B) -> Self::WriteZeroCopy {
+        // TODO: windows implementation
+        self.inner.write(buffer.bytes())
+    }
+}
+
 
 impl fmt::Debug for Stream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
