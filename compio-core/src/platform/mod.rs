@@ -5,7 +5,7 @@ macro_rules! try_libc {
             let fd = $x;
             if fd < 0 {
                 let err = ::std::io::Error::last_os_error();
-                error!($msg, err, $($arg)*);
+                error!($msg, err, $($arg,)*);
                 return ::std::result::Result::Err(err);
             }
             fd
@@ -14,11 +14,15 @@ macro_rules! try_libc {
     ($x:expr, $msg:tt $(,)* $($arg:expr),* $(,)*) => {
         if $x != 0 {
             let err = ::std::io::Error::last_os_error();
-            error!($msg, err, $($arg)*);
+            error!($msg, err, $($arg,)*);
             return ::std::result::Result::Err(err);
         }
     };
 }
+
+#[cfg(target_os = "linux")]
+#[path = "epoll.rs"]
+pub(crate) mod queue;
 
 #[cfg(target_os = "macos")]
 #[path = "kqueue/mod.rs"]

@@ -1,4 +1,16 @@
 // SOCK_SEQPACKET-based Channel implementation. Unfortunately not supported on macOS.
+use super::{set_nonblock_and_cloexec};
+
+use std::{io, mem};
+use std::sync::Arc;
+use std::future::Future;
+use std::task::{Poll, LocalWaker};
+use std::pin::{Pin, Unpin};
+use std::os::unix::prelude::*;
+
+use compio_core::queue::{Registrar};
+use compio_core::os::unix::*;
+use futures_util::try_ready;
 
 #[derive(Clone, Debug)]
 pub struct Channel {

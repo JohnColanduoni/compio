@@ -243,6 +243,9 @@ impl Registration {
         }
 
         if let Some(existing_waker) = &self.wakers[filter] {
+            // FIXME: this mechanism has a race: if a waker is inserted, then the event triggers and clears the
+            // waker queue, then the event is rearmed, then this code runs; in this situation this check will prevent
+            // inserting a waker into the new queue, even though no corresponding waker is present.
             if waker.will_wake_nonlocal(existing_waker) {
                 return Poll::Pending;
             }
@@ -267,11 +270,11 @@ impl Registration {
             // Ensure we put our waker in the queue after we're sure we're on a not listening -> listening edge
             state.listeners.push(waker.clone().into());
             unsafe {
-                let ptr = Arc::into_raw(self.inner.clone());
-
                 let queue = if let Some(queue) = self.inner.queue.upgrade() { queue } else {
                     return Err(io::Error::new(io::ErrorKind::BrokenPipe, "a request was made to register a file descriptor to receive events on an EventQueue, but that EventQueue has been dropped"));
                 };
+
+                let ptr = Arc::into_raw(self.inner.clone());
 
                 let mut changes = [libc::kevent {
                     ident: self.inner.fd as usize,
