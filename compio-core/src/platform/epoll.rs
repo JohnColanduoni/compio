@@ -88,7 +88,7 @@ struct RegistrationState {
     // We duplicate the file descriptor so we can adjust the state for each event type independently. This reduces
     // contention and churn for bidirection file descriptors.
     dup_fd: RawFd,
-    // When this value is even, the given state is "ready", an not read when odd. The sequence number is used so 
+    // When this value is even, the given state is "ready", an not ready when odd. The sequence number is used so 
     // it can be determined whether the current task is already subscribed to notifications.
     sequence: AtomicUsize,
     listeners: SegQueue<Waker>,

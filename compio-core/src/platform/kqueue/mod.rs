@@ -7,7 +7,7 @@ use std::{io, mem, ptr, cmp, fmt, ops};
 use std::collections::HashSet;
 use std::sync::{
     Arc, Weak, Mutex,
-    atomic::{Ordering, AtomicBool},
+    atomic::{Ordering, AtomicBool, AtomicUsize},
 };
 use std::time::Duration;
 use std::os::raw::{c_int, c_long};
@@ -42,8 +42,9 @@ pub struct Filter(i16);
 pub struct Registration {
     inner: Arc<_Registration>,
     // Used to keep spurious poll calls from filling up the Waker queue in the
-    // RegistrationState.
-    wakers: FilterCollection<Option<Waker>>,
+    // RegistrationState. The `usize` is a sequence number from the RegistrationState, and
+    // the Waker is a clone of the currently subscribed waker for the `will_wake` check.
+    wakers: FilterCollection<Option<(usize, Waker)>>,
 }
 
 struct _Registration {
@@ -66,11 +67,9 @@ impl Drop for _Registration {
 }
 
 struct RegistrationState {
-    ready: AtomicBool,
-    // TODO: Consider whether we want to go with an approach more like how Future.shared() is implemented (i.e. a Slab inside
-    // a Mutex). It has the advantage that if the Registration moves from one task to another, the old Waker is disposed. This isn't a
-    // huge issue since spurious wakeups are fine and migration of Futures is rare (especially now that Futures are pinned) but it's something
-    // to consider.
+    // When this value is even, the given state is "ready", an not ready when odd. The sequence number is used so 
+    // it can be determined whether the current task is already subscribed to notifications.
+    sequence: AtomicUsize,
     listeners: SegQueue<Waker>,
 }
 
@@ -144,10 +143,10 @@ impl EventQueue {
                         // ident is a file descriptor, and udata is an Arc<_Registration>
                         let registration = Arc::from_raw(event.udata as *const _Registration);
                         let state = &registration.states[Filter(event.filter)];
-                        if !state.ready.swap(true, Ordering::SeqCst) {
-                            while let Some(waker) = state.listeners.try_pop() {
-                                waker.wake();
-                            }
+                        let old_seq = state.sequence.fetch_add(1, Ordering::SeqCst);
+                        assert!(old_seq % 2 == 1, "registration should only be present in EVFILT_READ or EVFILT_WRITE event if it was most recently added to kqueue");
+                        while let Some(waker) = state.listeners.try_pop() {
+                            waker.wake();
                         }
                     },
                     #[cfg(target_os = "macos")]
@@ -224,7 +223,7 @@ impl fmt::Debug for Registrar {
 impl Default for RegistrationState {
     fn default() -> Self {
         RegistrationState {
-            ready: AtomicBool::new(true),
+            sequence: AtomicUsize::new(0),
             listeners: Default::default(),
         }
     }
@@ -237,36 +236,41 @@ pub trait EventQueueExt {
 impl Registration {
     pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
         let state = &self.inner.states[filter];
-        if state.ready.load(Ordering::SeqCst) {
-            self.wakers[filter] = None;
-            return Poll::Ready(Ok(()));
-        }
+        let mut sequence = state.sequence.load(Ordering::SeqCst);
+        loop {
+            if sequence % 2 == 0 {
+                self.wakers[filter] = None;
+                return Poll::Ready(Ok(()));
+            }
 
-        if let Some(existing_waker) = &self.wakers[filter] {
-            // FIXME: this mechanism has a race: if a waker is inserted, then the event triggers and clears the
-            // waker queue, then the event is rearmed, then this code runs; in this situation this check will prevent
-            // inserting a waker into the new queue, even though no corresponding waker is present.
-            if waker.will_wake_nonlocal(existing_waker) {
-                return Poll::Pending;
+            if let Some((existing_sequence, existing_waker)) = &self.wakers[filter] {
+                if *existing_sequence == sequence && waker.will_wake_nonlocal(existing_waker) {
+                    return Poll::Pending;
+                }
+            }
+
+            state.listeners.push(waker.clone().into());
+
+            // Check state again, just in case there was a race
+            match state.sequence.load(Ordering::SeqCst) {
+                x if x == sequence => {
+                    self.wakers[filter] = Some((sequence, waker.clone().into()));
+                    return Poll::Pending;
+                },
+                new_seq => {
+                    sequence = new_seq;
+                    continue;
+                },
             }
         }
-
-        state.listeners.push(waker.clone().into());
-        // Check state again, just in case there was a race
-        if state.ready.load(Ordering::SeqCst) {
-            self.wakers[filter] = None;
-            return Poll::Ready(Ok(()));
-        }
-        self.wakers[filter] = Some(waker.clone().into());
-
-        Poll::Pending
     }
 
     pub fn clear_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<()> {
         let state = &self.inner.states[filter];
-        // If we're the first to set the state to false, it's our job to add this (fd, filter) pair to the
-        // kqueue
-        if state.ready.swap(false, Ordering::SeqCst) {
+        let state = &self.inner.states[filter];
+        // If we're the first to set the state to not ready, it's our job to add this (fd, filter) pair to the kqueue
+        let old_sequence = state.sequence.fetch_or(0x1, Ordering::SeqCst);
+        if old_sequence % 2 == 0 {
             // Ensure we put our waker in the queue after we're sure we're on a not listening -> listening edge
             state.listeners.push(waker.clone().into());
             unsafe {
@@ -315,7 +319,7 @@ impl Registration {
         } else {
             state.listeners.push(waker.clone().into());
         }
-        self.wakers[filter] = Some(waker.clone().into());
+        self.wakers[filter] = Some((old_sequence | 0x1, waker.clone().into()));
 
         Ok(())
     }
