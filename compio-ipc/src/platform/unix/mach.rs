@@ -9,12 +9,12 @@ use std::task::{LocalWaker, Poll};
 use compio_core::queue::Registrar;
 use compio_core::os::macos::*;
 use futures_util::try_ready;
-use mach_port::{Port, PortMsgBuffer};
+use mach_port::{Port, MsgBuffer};
 
 pub struct Channel {
     inner: Arc<_Channel>,
     rx_registration: PortRegistration,
-    msg_buffer: Option<PortMsgBuffer>,
+    msg_buffer: Option<MsgBuffer>,
 }
 
 #[derive(Debug)]
@@ -186,12 +186,12 @@ impl<'a> Future for ChannelSendFuture<'a> {
 }
 
 #[inline]
-fn acquire_buffer(msg_buffer: &mut Option<PortMsgBuffer>) -> &mut PortMsgBuffer {
+fn acquire_buffer(msg_buffer: &mut Option<MsgBuffer>) -> &mut MsgBuffer {
     if let Some(buffer) = msg_buffer {
         buffer.reset();
         buffer
     } else {
-        *msg_buffer = Some(PortMsgBuffer::new());
+        *msg_buffer = Some(MsgBuffer::new());
         msg_buffer.as_mut().unwrap()
     }
 }
