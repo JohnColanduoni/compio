@@ -134,7 +134,7 @@ impl<'a> Future for ChannelRecvFuture<'a> {
         let this = &mut *self;
         try_ready!(this.channel.rx_registration.poll_recv_ready(waker));
         let msg_buffer = acquire_buffer(&mut this.channel.msg_buffer);
-        msg_buffer.reserve_inline(mem::size_of::<usize>() + this.buffer.len());
+        msg_buffer.reserve_inline_data(mem::size_of::<usize>() + this.buffer.len());
         match this.channel.inner.rx.recv(msg_buffer, Some(Duration::new(0, 0))) {
             Ok(()) => (),
             Err(ref err) if err.kind() == io::ErrorKind::TimedOut => {

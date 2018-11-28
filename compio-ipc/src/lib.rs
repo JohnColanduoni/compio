@@ -24,7 +24,10 @@ pub mod os {
 
     #[cfg(target_os = "macos")]
     pub mod macos {
-        pub use crate::platform::mach::{Port, PortMsg, PortMsgBuffer};
+        pub use crate::platform::mach::{
+            Port, PortMsg, PortMsgBuffer, PortMoveMode, PortCopyMode,
+            PortMsgDescriptor, PortMsgDescriptorKind, PortMsgDescriptorKindMut, PortMsgPortDescriptor,
+        };
     }
 }
 
