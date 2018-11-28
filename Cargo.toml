@@ -16,3 +16,6 @@ compio-local = { version = "0.1.0", path = "./compio-local" }
 compio-threadpool = { version = "0.1.0", path = "./compio-threadpool" }
 compio-ipc = { version = "0.1.0", path = "./compio-ipc" }
 compio-net = { version = "0.1.0", path = "./compio-net" }
+
+[patch.crates-io]
+mach-port = { path = "../machapi/mach-port" }

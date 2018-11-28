@@ -122,7 +122,7 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-        use std::task::{self, Poll, LocalWaker, Wake};
+        use std::task::{self, Poll, Wake};
         use std::io::{Read, Write};
         use std::fs::{File};
         use std::os::unix::prelude::*;

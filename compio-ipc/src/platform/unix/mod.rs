@@ -20,14 +20,9 @@ macro_rules! try_libc {
     };
 }
 
-#[cfg(not(target_os = "macos"))]
-#[path = "seqpacket.rs"]
+#[cfg_attr(not(target_os = "macos"), path = "seqpacket.rs")]
+#[cfg_attr(target_os = "macos", path = "mach.rs")]
 mod channel;
-
-#[cfg(target_os = "macos")]
-pub mod mach;
-#[cfg(target_os = "macos")]
-use self::mach::channel;
 
 pub use self::channel::{Channel, PreChannel, ChannelExt};
 

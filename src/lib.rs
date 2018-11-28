@@ -29,7 +29,6 @@ pub mod os {
     #[cfg(target_os = "macos")]
     pub mod macos {
         pub mod prelude {
-
         }
 
         pub use compio_core::os::macos as core;

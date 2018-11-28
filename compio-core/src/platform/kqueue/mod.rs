@@ -7,7 +7,7 @@ use std::{io, mem, ptr, cmp, fmt, ops};
 use std::collections::HashSet;
 use std::sync::{
     Arc, Weak, Mutex,
-    atomic::{Ordering, AtomicBool, AtomicUsize},
+    atomic::{Ordering, AtomicUsize},
 };
 use std::time::Duration;
 use std::os::raw::{c_int, c_long};
@@ -262,7 +262,6 @@ impl Registration {
     }
 
     pub fn clear_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<()> {
-        let state = &self.inner.states[filter];
         let state = &self.inner.states[filter];
         // If we're the first to set the state to not ready, it's our job to add this (fd, filter) pair to the kqueue
         let old_sequence = state.sequence.fetch_or(0x1, Ordering::SeqCst);

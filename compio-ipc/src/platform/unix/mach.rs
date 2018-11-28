@@ -1,6 +1,4 @@
 // Mach port based Channel implementation. Only supported on macOS.
-use super::{Port, PortMsgBuffer};
-
 use std::{io, fmt, mem, slice};
 use std::pin::{Pin, Unpin};
 use std::time::Duration;
@@ -11,6 +9,7 @@ use std::task::{LocalWaker, Poll};
 use compio_core::queue::Registrar;
 use compio_core::os::macos::*;
 use futures_util::try_ready;
+use mach_port::{Port, PortMsgBuffer};
 
 pub struct Channel {
     inner: Arc<_Channel>,
@@ -167,7 +166,7 @@ impl<'a> Unpin for ChannelSendFuture<'a> {}
 impl<'a> Future for ChannelSendFuture<'a> {
     type Output = io::Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, _waker: &LocalWaker) -> Poll<io::Result<()>> {
         // FIXME: implement async send with MACH_SEND_TIMEOUT and MACH_SEND_NOTIFY
         let this = &mut *self;
         let msg_buffer = acquire_buffer(&mut this.channel.msg_buffer);
@@ -181,7 +180,7 @@ impl<'a> Future for ChannelSendFuture<'a> {
                 msg_buffer.extend_inline_data(&[0u8; mem::size_of::<u32>()][..(mem::size_of::<u32>() - c)]);
             },
         }
-        this.channel.inner.tx.send(msg_buffer)?;
+        this.channel.inner.tx.send(msg_buffer, None)?;
         Poll::Ready(Ok(()))
     }
 }

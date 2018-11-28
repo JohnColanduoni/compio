@@ -1,7 +1,5 @@
 #![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
 #![feature(existential_type)]
-#![cfg_attr(unix, feature(min_const_fn))]
-#![cfg_attr(target_os = "macos", feature(try_from))]
 #![cfg_attr(test, feature(gen_future))]
 
 #[macro_use]
@@ -24,10 +22,6 @@ pub mod os {
 
     #[cfg(target_os = "macos")]
     pub mod macos {
-        pub use crate::platform::mach::{
-            Port, PortMsg, PortMsgBuffer, PortMoveMode, PortCopyMode,
-            PortMsgDescriptor, PortMsgDescriptorKind, PortMsgDescriptorKindMut, PortMsgPortDescriptor,
-        };
     }
 }
 
