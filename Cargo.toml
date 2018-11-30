@@ -18,4 +18,4 @@ compio-ipc = { version = "0.1.0", path = "./compio-ipc" }
 compio-net = { version = "0.1.0", path = "./compio-net" }
 
 [patch.crates-io]
-mach-port = { path = "../machapi/mach-port" }
+mach-port = { git = "https://github.com/JohnColanduoni/mach-rust", rev = "5d6f855edca2820fe2d256b3664eb332b732f6a5" }
