@@ -5,7 +5,7 @@ use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, Ordering},
 };
-use std::task::{Waker, LocalWaker, Poll};
+use std::task::{Waker, Poll};
 use std::os::raw::{c_int};
 
 use crossbeam::queue::SegQueue;
@@ -62,14 +62,14 @@ impl RegistrarExt for crate::queue::Registrar {
 
 
 impl PortRegistration {
-    pub fn poll_recv_ready(&mut self, waker: &LocalWaker) -> Poll<io::Result<()>> {
+    pub fn poll_recv_ready(&mut self, waker: &Waker) -> Poll<io::Result<()>> {
         if self.inner.ready.load(Ordering::SeqCst) {
             self.waker = None;
             return Poll::Ready(Ok(()));
         }
 
         if let Some(existing_waker) = &self.waker {
-            if waker.will_wake_nonlocal(existing_waker) {
+            if waker.will_wake(existing_waker) {
                 return Poll::Pending;
             }
         }
@@ -85,7 +85,7 @@ impl PortRegistration {
         Poll::Pending
     }
 
-    pub fn clear_recv_ready(&mut self, waker: &LocalWaker) -> io::Result<()> {
+    pub fn clear_recv_ready(&mut self, waker: &Waker) -> io::Result<()> {
         // If we're the first to set the state to false, it's our job to add this port to the
         // kqueue
         if self.inner.ready.swap(false, Ordering::SeqCst) {

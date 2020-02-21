@@ -1,14 +1,15 @@
 // Mach port based Channel implementation. Only supported on macOS.
 use std::{io, fmt, mem, slice};
-use std::pin::{Pin, Unpin};
+use std::marker::Unpin;
+use std::pin::{Pin};
 use std::time::Duration;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{LocalWaker, Poll};
+use std::task::{Context, Poll};
 
 use compio_core::queue::Registrar;
 use compio_core::os::macos::*;
-use futures_util::try_ready;
+use futures_util::ready;
 use mach_port::{Port, MsgBuffer};
 
 pub struct Channel {
@@ -129,15 +130,15 @@ impl<'a> Unpin for ChannelRecvFuture<'a> {}
 impl<'a> Future for ChannelRecvFuture<'a> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<usize>> {
         let this = &mut *self;
-        try_ready!(this.channel.rx_registration.poll_recv_ready(waker));
+        ready!(this.channel.rx_registration.poll_recv_ready(context.waker())?);
         let msg_buffer = acquire_buffer(&mut this.channel.msg_buffer);
         msg_buffer.reserve_inline_data(mem::size_of::<usize>() + this.buffer.len());
         match this.channel.inner.rx.recv(msg_buffer, Some(Duration::new(0, 0))) {
             Ok(()) => (),
             Err(ref err) if err.kind() == io::ErrorKind::TimedOut => {
-                this.channel.rx_registration.clear_recv_ready(waker)?;
+                this.channel.rx_registration.clear_recv_ready(context.waker())?;
                 return Poll::Pending;
             },
             Err(err) => return Poll::Ready(Err(err)),
@@ -166,7 +167,7 @@ impl<'a> Unpin for ChannelSendFuture<'a> {}
 impl<'a> Future for ChannelSendFuture<'a> {
     type Output = io::Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, _waker: &LocalWaker) -> Poll<io::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, _context: &mut Context) -> Poll<io::Result<()>> {
         // FIXME: implement async send with MACH_SEND_TIMEOUT and MACH_SEND_NOTIFY
         let this = &mut *self;
         let msg_buffer = acquire_buffer(&mut this.channel.msg_buffer);

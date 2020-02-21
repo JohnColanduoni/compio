@@ -20,7 +20,7 @@ pub unsafe trait PinnedBuffer {
     /// Captures the memory pointed to by this `PinnedBuffer`, to be released at a later time.
     /// 
     /// After this method is called no more operations are allowed on the `PinnedBuffer`.
-    fn take(&mut self) -> Box<Send>;
+    fn take(&mut self) -> Box<dyn Send>;
 }
 
 pub unsafe trait PinnedBufferMut: PinnedBuffer {
@@ -42,7 +42,7 @@ cfg_if! {
                 &**self
             }
 
-            fn take(&mut self) -> Box<Send> {
+            fn take(&mut self) -> Box<dyn Send> {
                 Box::new(self.clone())
             }
         }
@@ -60,7 +60,7 @@ cfg_if! {
                 &**self
             }
 
-            fn take(&mut self) -> Box<Send> {
+            fn take(&mut self) -> Box<dyn Send> {
                 let taken: bytes::BytesMut = mem::replace(self, bytes::BytesMut::new());
                 Box::new(taken)
             }

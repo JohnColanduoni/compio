@@ -27,15 +27,16 @@ mod channel;
 pub use self::channel::{Channel, PreChannel, ChannelExt};
 
 use std::{io, mem};
-use std::pin::{Pin, Unpin};
+use std::marker::Unpin;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{LocalWaker, Poll};
+use std::task::{Context, Poll};
 use std::os::unix::prelude::*;
 
 use compio_core::queue::Registrar;
 use compio_core::os::unix::*;
-use futures_util::try_ready;
+use futures_util::ready;
 
 #[derive(Clone, Debug)]
 pub struct Stream {
@@ -158,8 +159,8 @@ impl<'a> Unpin for StreamReadFuture<'a> {}
 impl<'a> Future for StreamReadFuture<'a> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
-        try_ready!(self.stream.registration.poll_ready(Filter::READ, waker));
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<usize>> {
+        ready!(self.stream.registration.poll_ready(Filter::READ, context.waker())?);
 
         let byte_count = loop {
             unsafe {
@@ -168,7 +169,7 @@ impl<'a> Future for StreamReadFuture<'a> {
                     let err = io::Error::last_os_error();
                     match err.kind() {
                         io::ErrorKind::WouldBlock => {
-                            self.stream.registration.clear_ready(Filter::READ, waker)?;
+                            self.stream.registration.clear_ready(Filter::READ, context.waker())?;
                             return Poll::Pending;
                         },
                         io::ErrorKind::Interrupted => continue,
@@ -195,8 +196,8 @@ impl<'a> Unpin for StreamWriteFuture<'a> {}
 impl<'a> Future for StreamWriteFuture<'a> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<io::Result<usize>> {
-        try_ready!(self.stream.registration.poll_ready(Filter::WRITE, waker));
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<usize>> {
+        ready!(self.stream.registration.poll_ready(Filter::WRITE, context.waker())?);
 
         let byte_count = loop {
             unsafe {
@@ -205,7 +206,7 @@ impl<'a> Future for StreamWriteFuture<'a> {
                     let err = io::Error::last_os_error();
                     match err.kind() {
                         io::ErrorKind::WouldBlock =>  {
-                            self.stream.registration.clear_ready(Filter::WRITE, waker)?;
+                            self.stream.registration.clear_ready(Filter::WRITE, context.waker())?;
                             return Poll::Pending;
                         },
                         io::ErrorKind::Interrupted => {},

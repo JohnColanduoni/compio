@@ -1,6 +1,3 @@
-#![feature(futures_api)]
-#![cfg_attr(target_os = "windows", feature(pin, arbitrary_self_types))]
-
 #[macro_use] extern crate log;
 
 pub mod queue;

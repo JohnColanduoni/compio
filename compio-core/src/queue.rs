@@ -15,7 +15,7 @@ pub struct UserEvent {
     pub(crate) inner: crate::platform::queue::UserEvent,
 }
 
-pub type UserEventHandler = Box<Fn(usize) + Send + Sync>;
+pub type UserEventHandler = Box<dyn Fn(usize) + Send + Sync>;
 
 impl EventQueue {
     pub fn new() -> io::Result<EventQueue> {
@@ -122,13 +122,14 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-        use std::task::{self, Poll, Wake};
+        use std::task::{Poll};
         use std::io::{Read, Write};
         use std::fs::{File};
         use std::os::unix::prelude::*;
 
         use nix::unistd::pipe;
         use libc;
+        use futures_task::{self as task, ArcWake};
 
         #[test]
         fn registration_is_send_and_sync() {
@@ -149,7 +150,7 @@ mod tests {
             let waker = Arc::new(CountWaker {
                 count: AtomicUsize::new(0),
             });
-            let local_waker = task::local_waker_from_nonlocal(waker.clone());
+            let local_waker = task::waker(waker.clone());
             // poll_ready should return ready since we haven't called clear_ready yet
             match registration.poll_ready(Filter::READ, &local_waker) {
                 Poll::Ready(Ok(())) => {},
@@ -177,8 +178,8 @@ mod tests {
             count: AtomicUsize,
         }
 
-        impl Wake for CountWaker {
-            fn wake(arc_self: &Arc<Self>) {
+        impl ArcWake for CountWaker {
+            fn wake_by_ref(arc_self: &Arc<Self>) {
                 arc_self.count.fetch_add(1, Ordering::SeqCst);
             }
         }

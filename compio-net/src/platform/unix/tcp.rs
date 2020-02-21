@@ -1,10 +1,11 @@
 use super::set_nonblock_and_cloexec;
 
 use std::{mem, io};
-use std::pin::{Pin, Unpin};
+use std::marker::Unpin;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{Poll, LocalWaker};
+use std::task::{Poll, Context};
 use std::io::Result;
 use std::net::SocketAddr;
 use std::os::unix::prelude::*;
@@ -12,7 +13,7 @@ use std::os::unix::prelude::*;
 use compio_core::queue::Registrar;
 use compio_core::os::unix::*;
 use libc;
-use futures_util::try_ready;
+use futures_util::ready;
 use net2::TcpBuilder;
 
 #[derive(Clone, Debug)]
@@ -115,8 +116,8 @@ impl<'a> Unpin for AcceptFuture<'a> {}
 impl<'a> Future for AcceptFuture<'a> {
     type Output = Result<TcpStream>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Result<TcpStream>> {
-        try_ready!(self.listener.registration.poll_ready(Filter::READ, waker));
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Result<TcpStream>> {
+        ready!(self.listener.registration.poll_ready(Filter::READ, context.waker())?);
 
         unsafe {
             let mut remote_addr: libc::sockaddr = mem::zeroed();
@@ -126,7 +127,7 @@ impl<'a> Future for AcceptFuture<'a> {
             if socket < 0 {
                 let err = io::Error::last_os_error();
                 if err.kind() == io::ErrorKind::WouldBlock {
-                    self.listener.registration.clear_ready(Filter::READ, waker)?;
+                    self.listener.registration.clear_ready(Filter::READ, context.waker())?;
                     return Poll::Pending;
                 } else {
                     debug!("accept failed: {}", err);
@@ -149,7 +150,7 @@ impl<'a> Unpin for ConnectFuture<'a> {}
 impl<'a> Future for ConnectFuture<'a> {
     type Output = Result<TcpStream>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Result<TcpStream>> {
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Result<TcpStream>> {
         if self.socket.is_none() {
             let std_stream = if self.addr.is_ipv4() {
                 TcpBuilder::new_v4()?.to_tcp_stream()?
@@ -170,7 +171,7 @@ impl<'a> Future for ConnectFuture<'a> {
                 if libc::connect(socket.inner.std.as_raw_fd(), sockaddr, sockaddr_len) != 0 {
                     let err = io::Error::last_os_error();
                     if err.raw_os_error() == Some(libc::EINPROGRESS) {
-                        socket.registration.clear_ready(Filter::WRITE, waker)?;
+                        socket.registration.clear_ready(Filter::WRITE, context.waker())?;
                         self.socket = Some(socket);
                         return Poll::Pending;
                     }
@@ -185,7 +186,7 @@ impl<'a> Future for ConnectFuture<'a> {
         {
             let socket = self.socket.as_mut().unwrap();
 
-            try_ready!(socket.registration.poll_ready(Filter::WRITE, waker));
+            ready!(socket.registration.poll_ready(Filter::WRITE, context.waker())?);
 
             if let Err(err) = socket.inner.std.take_error() {
                 return Poll::Ready(Err(err));
@@ -206,8 +207,8 @@ unsafe impl<'a> Send for ReadFuture<'a> {}
 impl<'a> Future for ReadFuture<'a> {
     type Output = Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Result<usize>> {
-        try_ready!(self.stream.registration.poll_ready(Filter::READ, waker));
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Result<usize>> {
+        ready!(self.stream.registration.poll_ready(Filter::READ, context.waker())?);
 
         let byte_count = loop {
             unsafe {
@@ -216,7 +217,7 @@ impl<'a> Future for ReadFuture<'a> {
                     let err = io::Error::last_os_error();
                     match err.kind() {
                         io::ErrorKind::WouldBlock => {
-                            self.stream.registration.clear_ready(Filter::READ, waker)?;
+                            self.stream.registration.clear_ready(Filter::READ, context.waker())?;
                             return Poll::Pending;
                         },
                         io::ErrorKind::Interrupted => continue,
@@ -243,8 +244,8 @@ unsafe impl<'a> Send for WriteFuture<'a> {}
 impl<'a> Future for WriteFuture<'a> {
     type Output = Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Result<usize>> {
-        try_ready!(self.stream.registration.poll_ready(Filter::WRITE, waker));
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Result<usize>> {
+        ready!(self.stream.registration.poll_ready(Filter::WRITE, context.waker())?);
 
         let byte_count = loop {
             unsafe {
@@ -253,7 +254,7 @@ impl<'a> Future for WriteFuture<'a> {
                     let err = io::Error::last_os_error();
                     match err.kind() {
                         io::ErrorKind::WouldBlock => {
-                            self.stream.registration.clear_ready(Filter::WRITE, waker)?;
+                            self.stream.registration.clear_ready(Filter::WRITE, context.waker())?;
                             return Poll::Pending;
                         },
                         io::ErrorKind::Interrupted => {},

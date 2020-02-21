@@ -1,7 +1,7 @@
 use crate::platform::queue as sys_queue;
 
 use std::{io};
-use std::task::{LocalWaker, Poll};
+use std::task::{Waker, Poll};
 use std::os::unix::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -42,31 +42,31 @@ impl RegistrarExt for crate::queue::Registrar {
 impl Registration {
     /**
      * Determines whether a file descriptor is ready for a particular kind of operation, registering
-     * a [LocalWaker](std::task::LocalWaker) to receive a signal once it is ready if it is not.
+     * a [Waker](std::task::Waker) to receive a signal once it is ready if it is not.
      * 
      * Note that this function does not guarantee that the file descriptor is in fact ready. It will only 
      * function properly if the caller attempts to perform the operation after receiving a ready
      * state, calling [clear_ready](Registration::clear_ready) if [WouldBlock](std::io::ErrorKind::WouldBlock) is
      * received.
      * 
-     * Calling [poll_ready](Registration::poll_ready) or [clear_ready](Registration::clear_ready) with a different [LocalWaker](std::task::LocalWaker)
+     * Calling [poll_ready](Registration::poll_ready) or [clear_ready](Registration::clear_ready) with a different [Waker](std::task::Waker)
      * may cause the previously registered waker for this clone of [Registration](Registration) to be unregistered. A particular clone of the Registration 
      * should always be used with only one [Future](std::future::Future).
      */
-    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
+    pub fn poll_ready(&mut self, filter: Filter, waker: &Waker) -> Poll<io::Result<()>> {
         self.0.poll_ready(filter.0, waker)
     }
 
     /**
      * Called to notify the [EventQueue](crate::queue::EventQueue) that a [WouldBlock](std::io::ErrorKind::WouldBlock) was received and the
      * file descriptor must be scheduled for notifications of a state update via the queue. Also registers the
-     * given [LocalWaker](std::task::LocalWaker) to be notified once the state changes.
+     * given [Waker](std::task::Waker) to be notified once the state changes.
      * 
-     * Calling [poll_ready](Registration::poll_ready) or [clear_ready](Registration::clear_ready) with a different [LocalWaker](std::task::LocalWaker)
+     * Calling [poll_ready](Registration::poll_ready) or [clear_ready](Registration::clear_ready) with a different [Waker](std::task::Waker)
      * may cause the previously registered waker for this clone of [Registration](Registration) to be unregistered. A particular clone of the Registration 
      * should always be used with only one [Future](std::future::Future).
      */
-    pub fn clear_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<()> {
+    pub fn clear_ready(&mut self, filter: Filter, waker: &Waker) -> io::Result<()> {
         self.0.clear_ready(filter.0, waker)
     }
 }

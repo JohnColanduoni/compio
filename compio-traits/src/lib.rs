@@ -1,6 +1,3 @@
-#![feature(futures_api)]
-#![feature(associated_type_defaults, specialization)]
-
 mod pinned_buffer;
 
 pub use self::pinned_buffer::{PinnedBuffer, PinnedBufferMut};

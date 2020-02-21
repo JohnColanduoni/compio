@@ -36,7 +36,7 @@ impl TcpListener {
 
     pub fn accept<'a>(&'a mut self) -> impl Future<Output = Result<TcpStream>> + Send + 'a {
         async move {
-            let inner = await!(self.inner.accept())?;
+            let inner = self.inner.accept().await?;
             Ok(TcpStream { inner })
         }
     }
@@ -45,7 +45,7 @@ impl TcpListener {
 impl TcpStream {
     pub fn connect<'a>(addr: SocketAddr, queue: &'a Registrar) -> impl Future<Output = Result<TcpStream>> + Send + 'a {
         async move {
-            let inner = await!(platform::TcpStream::connect(addr, queue))?;
+            let inner = platform::TcpStream::connect(addr, queue).await?;
             Ok(TcpStream { inner })
         }
     }
@@ -90,10 +90,9 @@ mod tests {
 
     use std::str::FromStr;
     use std::time::Duration;
-    use std::future::poll_with_tls_waker;
 
     use compio_local::LocalExecutor;
-    use futures_util::{try_join, join};
+    use futures_util::{try_join, join, poll};
     use pin_utils::pin_mut;
 
     #[test]
@@ -123,14 +122,14 @@ mod tests {
 
             let server = async {
                 let mut buffer = [0u8; 256];
-                let byte_count = await!(accepted.read(&mut buffer)).unwrap();
+                let byte_count = accepted.read(&mut buffer).await.unwrap();
                 let buffer = &buffer[0..byte_count];
-                await!(accepted.write(buffer)).unwrap();
+                accepted.write(buffer).await.unwrap();
             };
             let client = async {
-                await!(connected.write(b"Hello World!")).unwrap();
+                connected.write(b"Hello World!").await.unwrap();
                 let mut buffer = [0u8; 256];
-                let byte_count = await!(connected.read(&mut buffer)).unwrap();
+                let byte_count = connected.read(&mut buffer).await.unwrap();
                 let buffer = &buffer[0..byte_count];
                 assert_eq!(b"Hello World!", buffer);
             };
@@ -154,14 +153,14 @@ mod tests {
 
             let server = async {
                 let mut buffer = [0u8; 256];
-                let byte_count = await!(accepted.read(&mut buffer)).unwrap();
+                let byte_count = accepted.read(&mut buffer).await.unwrap();
                 let buffer = &buffer[0..byte_count];
-                await!(accepted.write(buffer)).unwrap();
+                accepted.write(buffer).await.unwrap();
             };
             let client = async {
-                await!(connected.write(b"Hello World!")).unwrap();
+                connected.write(b"Hello World!").await.unwrap();
                 let mut buffer = [0u8; 256];
-                let byte_count = await!(connected.read(&mut buffer)).unwrap();
+                let byte_count = connected.read(&mut buffer).await.unwrap();
                 let buffer = &buffer[0..byte_count];
                 assert_eq!(b"Hello World!", buffer);
             };
@@ -180,7 +179,7 @@ mod tests {
             let mut listener = TcpListener::bind(&SocketAddr::from_str("127.0.0.1:0").unwrap(), &registrar).unwrap();
             let accept = listener.accept();
             pin_mut!(accept);
-            assert!(poll_with_tls_waker(accept).is_pending());
+            assert!(poll!(accept).is_pending());
         });
         // Make sure cancellation was received by IOCP on Windows
         if cfg!(target_os = "windows") {

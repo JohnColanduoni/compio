@@ -1,7 +1,3 @@
-#![feature(futures_api, async_await, await_macro, pin, arbitrary_self_types)]
-#![feature(existential_type)]
-#![cfg_attr(test, feature(gen_future))]
-
 #[macro_use]
 extern crate log;
 
@@ -180,12 +176,11 @@ mod tests {
     use super::*;
 
     use std::{mem};
-    use std::future::poll_with_tls_waker;
     use std::time::Duration;
 
     use compio_core::queue::EventQueue;
     use compio_local::LocalExecutor;
-    use futures_util::join;
+    use futures_util::{join, poll};
     use pin_utils::pin_mut;
 
     #[test]
@@ -226,12 +221,12 @@ mod tests {
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                let byte_count = a.read(&mut buffer).await.unwrap();
                 buffer.truncate(byte_count);
                 buffer
             };
             let write = async {
-                await!(b.write(b"Hello World!")).unwrap()
+                b.write(b"Hello World!").await.unwrap()
             };
             let (read, _write) = join!(read, write);
 
@@ -249,12 +244,12 @@ mod tests {
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.read(&mut buffer)).unwrap();
+                let byte_count = a.read(&mut buffer).await.unwrap();
                 buffer.truncate(byte_count);
                 buffer
             };
             pin_mut!(read);
-            assert!(poll_with_tls_waker(read).is_pending());
+            assert!(poll!(read).is_pending());
         });
         // Make sure the IOCP received the cancellation notification
         if cfg!(target_os = "windows") {
@@ -272,12 +267,12 @@ mod tests {
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.recv(&mut buffer)).unwrap();
+                let byte_count = a.recv(&mut buffer).await.unwrap();
                 buffer.truncate(byte_count);
                 buffer
             };
             let write = async {
-                await!(b.send(b"Hello World!")).unwrap()
+                b.send(b"Hello World!").await.unwrap()
             };
             let (read, _write) = join!(read, write);
 
@@ -295,16 +290,16 @@ mod tests {
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.recv(&mut buffer)).unwrap();
+                let byte_count = a.recv(&mut buffer).await.unwrap();
                 buffer.truncate(byte_count);
                 let mut buffer2 = vec![0u8; 64];
-                let byte_count2 = await!(a.recv(&mut buffer2)).unwrap();
+                let byte_count2 = a.recv(&mut buffer2).await.unwrap();
                 buffer2.truncate(byte_count2);
                 (buffer, buffer2)
             };
             let write = async move {
-                await!(b.send(b"Hello World!!")).unwrap();
-                await!(b.send(b":)")).unwrap();
+                b.send(b"Hello World!!").await.unwrap();
+                b.send(b":)").await.unwrap();
                 mem::drop(b);
             };
             let (_write, read) = join!(write, read);
@@ -324,12 +319,12 @@ mod tests {
         executor.block_on(async {
             let read = async {
                 let mut buffer = vec![0u8; 64];
-                let byte_count = await!(a.recv(&mut buffer)).unwrap();
+                let byte_count = a.recv(&mut buffer).await.unwrap();
                 buffer.truncate(byte_count);
                 buffer
             };
             pin_mut!(read);
-            assert!(poll_with_tls_waker(read).is_pending());
+            assert!(poll!(read).is_pending());
         });
         // Make sure the IOCP received the cancellation notification
         if cfg!(target_os = "windows") {

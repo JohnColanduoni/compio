@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use std::os::raw::{c_int, c_long};
-use std::task::{LocalWaker, Waker, Poll};
+use std::task::{Waker, Poll};
 use std::os::unix::prelude::*;
 
 use libc::{self, c_void};
@@ -230,7 +230,7 @@ impl Default for RegistrationState {
 }
 
 impl Registration {
-    pub fn poll_ready(&mut self, filter: Filter, waker: &LocalWaker) -> Poll<io::Result<()>> {
+    pub fn poll_ready(&mut self, filter: Filter, waker: &Waker) -> Poll<io::Result<()>> {
         let state = &self.inner.states[filter];
         let mut sequence = state.sequence.load(Ordering::SeqCst);
         loop {
@@ -240,7 +240,7 @@ impl Registration {
             }
 
             if let Some((existing_sequence, existing_waker)) = &self.wakers[filter] {
-                if *existing_sequence == sequence && waker.will_wake_nonlocal(existing_waker) {
+                if *existing_sequence == sequence && waker.will_wake(existing_waker) {
                     return Poll::Pending;
                 }
             }
@@ -261,7 +261,7 @@ impl Registration {
         }
     }
 
-    pub fn clear_ready(&mut self, filter: Filter, waker: &LocalWaker) -> io::Result<()> {
+    pub fn clear_ready(&mut self, filter: Filter, waker: &Waker) -> io::Result<()> {
         let state = &self.inner.states[filter];
         // If we're the first to set the state to not ready, it's our job to add this (fd, filter) pair to the kqueue
         let old_sequence = state.sequence.fetch_or(0x1, Ordering::SeqCst);

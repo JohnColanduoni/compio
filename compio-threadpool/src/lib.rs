@@ -1,5 +1,4 @@
 use std::{io};
-use std::thread::{JoinHandle};
 
 pub struct ThreadPool {
 }

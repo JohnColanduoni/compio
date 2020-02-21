@@ -1,5 +1,3 @@
-#![feature(futures_api, pin)]
-
 use std::{io};
 use std::pin::Pin;
 use std::sync::{
@@ -7,20 +5,20 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use std::future::Future;
-use std::task::{self, Wake, Poll};
+use std::task::{Poll, Context};
 
 use compio_core::queue::{EventQueue, UserEvent, Registrar};
 use scoped_tls::scoped_thread_local;
 use pin_utils::pin_mut;
 use futures_core::{
-    future::LocalFutureObj,
     stream::Stream,
 };
+use futures_task::{self as task, ArcWake};
 use futures_util::stream::FuturesUnordered;
 
 pub struct LocalExecutor {
     shared: Arc<_LocalExecutor>,
-    spanwed_futures: FuturesUnordered<LocalFutureObj<'static, ()>>,
+    spawned_futures: FuturesUnordered<Pin<Box<dyn Future<Output=()>>>>,
 }
 
 struct _LocalExecutor {
@@ -52,7 +50,7 @@ impl LocalExecutor {
 
         Ok(LocalExecutor {
             shared,
-            spanwed_futures: FuturesUnordered::new(),
+            spawned_futures: FuturesUnordered::new(),
         })
     }
 
@@ -68,20 +66,21 @@ impl LocalExecutor {
         F: Future,
     {
         pin_mut!(future);
-        let waker = unsafe { task::local_waker(self.shared.clone()) };
 
         let executor_id = _LocalExecutor::id(&self.shared);
-        CURRENT_LOCAL_EXECUTOR_ID.set(&executor_id, move || {
+        CURRENT_LOCAL_EXECUTOR_ID.set(&executor_id, || {
+            let waker = task::waker_ref(&self.shared);
+            let mut context = Context::from_waker(&*waker);
             let mut init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
             'outer: loop {
-                match Pin::new(&mut future).poll(&waker) {
+                match Pin::new(&mut future).poll(&mut context) {
                     Poll::Ready(x) => return x,
                     Poll::Pending => {},
                 }
                 // Poll the spawned futures until there are either none left or they are all waiting
                 // to be awoken
                 loop {
-                    match Pin::new(&mut self.spanwed_futures).poll_next(&waker) {
+                    match Pin::new(&mut self.spawned_futures).poll_next(&mut context) {
                         Poll::Ready(Some(())) => {},
                         Poll::Ready(None) => break,
                         Poll::Pending => break,
@@ -98,7 +97,7 @@ impl LocalExecutor {
                     }
                 }
 
-                'turn: loop {
+                loop {
                     self.shared.queue.turn(None, None).expect("failed to turn EventQueue");
                     init_seq = self.shared.awake_seq.load(Ordering::SeqCst);
                     if init_seq != 0 {
@@ -112,11 +111,11 @@ impl LocalExecutor {
     pub fn spawn<F>(&mut self, future: F) where
         F: Future<Output = ()> + 'static
     {
-        self.spawn_obj(LocalFutureObj::new(Box::new(future)));
+        self.spawn_obj(Pin::from(Box::new(future)));
     }
 
-    pub fn spawn_obj(&mut self, future: LocalFutureObj<'static, ()>) {
-        self.spanwed_futures.push(future);
+    pub fn spawn_obj(&mut self, future: Pin<Box<dyn Future<Output=()>>>) {
+        self.spawned_futures.push(future);
     }
 }
 
@@ -130,8 +129,8 @@ impl _LocalExecutor {
     }
 }
 
-impl Wake for _LocalExecutor {
-    fn wake(arc_self: &Arc<Self>) {
+impl ArcWake for _LocalExecutor {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
         // Avoid triggering remote wakeup if we're already in a turn pass
         let needs_queue_event = if CURRENT_LOCAL_EXECUTOR_ID.is_set() {
             CURRENT_LOCAL_EXECUTOR_ID.with(|&current_id| current_id != _LocalExecutor::id(arc_self))
