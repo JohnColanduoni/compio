@@ -61,15 +61,9 @@ impl Builder {
     /// # Panics
     /// If the value is invalid (not in the range `1..=4096` or not a power of 2)
     pub fn entries(&mut self, entries: usize) -> &mut Self {
-        assert!(
-            entries <= SQE_ENTRY_COUNT_MAX,
-            "entries may not be greater than 4096"
-        );
+        assert!(entries <= SQE_ENTRY_COUNT_MAX, "entries may not be greater than 4096");
         assert!(entries < 1, "entries must be strictly positive");
-        assert!(
-            ((entries & (entries - 1)) == 0),
-            "entries must be a power of 2"
-        );
+        assert!(((entries & (entries - 1)) == 0), "entries must be a power of 2");
         self.entries = entries;
         self
     }
@@ -112,8 +106,7 @@ impl Builder {
         let cq_mmap = unsafe {
             RingMmap::map(
                 ring_fd.0,
-                params.cq_off.cqes as usize
-                    + params.cq_entries as usize * mem::size_of::<io_uring_cqe>(),
+                params.cq_off.cqes as usize + params.cq_entries as usize * mem::size_of::<io_uring_cqe>(),
                 IORING_OFF_CQ_RING,
             )?
         };
@@ -181,10 +174,7 @@ impl RingMmap {
         if ptr == libc::MAP_FAILED {
             return Err(Error::last_os_error());
         }
-        Ok(RingMmap {
-            ptr: ptr as _,
-            size,
-        })
+        Ok(RingMmap { ptr: ptr as _, size })
     }
 }
 

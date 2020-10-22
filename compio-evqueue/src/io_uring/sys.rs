@@ -136,11 +136,6 @@ pub unsafe fn io_uring_enter(
     libc::syscall(NR_IO_URING_ENTER, fd, to_submit, min_complete, flags, sig) as c_int
 }
 
-pub unsafe fn io_uring_register(
-    fd: c_uint,
-    opcode: c_uint,
-    arg: *mut c_void,
-    nr_args: c_uint,
-) -> c_int {
+pub unsafe fn io_uring_register(fd: c_uint, opcode: c_uint, arg: *mut c_void, nr_args: c_uint) -> c_int {
     libc::syscall(NR_IO_URING_REGISTER, fd, opcode, arg, nr_args) as c_int
 }

@@ -1,0 +1,13 @@
+name: ci
+on: [push]
+jobs:
+  check-rustfmt:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        run: rustup default 1.47.0
+      - name: Download rustfmt
+        run: rustup component add rustfmt
+      - name: Run rustfmt
+        run: rustfmt --check --edition 2018 $(find . -name '*.rs' -print)
