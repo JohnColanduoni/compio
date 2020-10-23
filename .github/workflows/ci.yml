@@ -15,8 +15,11 @@ jobs:
       - uses: actions/checkout@v2
       - name: Install Rust
         run: rustup default 1.47.0
+      - name: Install cargo hack
+        run: cargo install cargo-hack
       - name: Run tests
-        run: cargo --color=always test --workspace
+        # TODO: figure out why io_uring can't be used on GitHub runners
+        run: cargo hack --color=always test --workspace --no-default-features
 
   check-rustfmt:
     runs-on: ubuntu-20.04
